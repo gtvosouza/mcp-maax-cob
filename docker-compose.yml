@@ -1,0 +1,36 @@
+version: "3.9"
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mcpuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mcppass}
+      POSTGRES_DB: ${POSTGRES_DB:-mcp}
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  api:
+    build: .
+    depends_on:
+      - db
+      - redis
+      - rabbitmq
+    env_file: .env.example
+    ports:
+      - "3000:3000"
+
+volumes:
+  db-data:
