@@ -28,7 +28,7 @@ async function main() {
     const mcpServer = new MCPChargeServer();
     
     // Criar transporte HTTP
-    const transport = new HTTPMCPTransport(mcpServer.getServer());
+    const transport = new HTTPMCPTransport();
     
     // Iniciar servidor
     await transport.listen(port);

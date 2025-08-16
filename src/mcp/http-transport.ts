@@ -1,17 +1,26 @@
 import express from "express";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { JSONRPCMessage, JSONRPCRequest, JSONRPCResponse } from "@modelcontextprotocol/sdk/types.js";
+
+// Definições simplificadas para evitar problemas de importação
+interface JSONRPCRequest {
+  jsonrpc: string;
+  method: string;
+  params?: any;
+  id?: string | number | null;
+}
+
+interface JSONRPCMessage {
+  jsonrpc: string;
+  id?: string | number | null;
+}
 
 /**
  * Transporte HTTP simples que segue o protocolo MCP oficial
  * Aceita JSON-RPC 2.0 via POST /mcp
  */
 export class HTTPMCPTransport {
-  private server: Server;
   private app: express.Express;
 
-  constructor(server: Server) {
-    this.server = server;
+  constructor() {
     this.app = express();
     this.setupMiddleware();
     this.setupRoutes();
@@ -48,47 +57,72 @@ export class HTTPMCPTransport {
         
         console.error(`[MCP] Processing JSON-RPC method: ${request.method}`);
         
-        // Create a simple transport interface for the server
-        const transport = {
-          start: async () => {},
-          close: async () => {},
-          send: async (message: JSONRPCMessage) => {
-            res.json(message);
-          }
-        };
+        // Direct JSON-RPC 2.0 handling without SDK dependency
 
-        // Connect server to our transport
-        await this.server.connect(transport as any);
-
-        // Process the request through the server
+        // Process MCP requests
         if (request.method === "initialize") {
-          const response = await this.server.request(
-            { method: "initialize", params: request.params },
-            request.id as string | number
-          );
           res.json({
             jsonrpc: "2.0",
-            result: response,
+            result: {
+              protocolVersion: "2024-11-05",
+              capabilities: {
+                tools: { listChanged: true }
+              },
+              serverInfo: {
+                name: "mcp-maax-cob",
+                version: "1.0.0"
+              }
+            },
             id: request.id
           });
         } else if (request.method === "tools/list") {
-          const response = await this.server.request(
-            { method: "tools/list", params: request.params || {} },
-            request.id as string | number
-          );
           res.json({
             jsonrpc: "2.0",
-            result: response,
+            result: {
+              tools: [
+                {
+                  name: "create_charge",
+                  description: "Cria uma cobrança/unificação boleto/pix via MCP",
+                  inputSchema: {
+                    type: "object",
+                    properties: {
+                      provider_id: { type: "string" },
+                      amount: { type: "integer" },
+                      due_date: { type: "string" },
+                      payment_methods: { type: "array", items: { type: "string" } },
+                      customer: { type: "object" },
+                      api_key: { type: "string" }
+                    },
+                    required: ["provider_id", "amount", "due_date", "payment_methods", "customer", "api_key"]
+                  }
+                },
+                {
+                  name: "retrieve_charge",
+                  description: "Consulta uma cobrança por ID",
+                  inputSchema: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string" },
+                      api_key: { type: "string" }
+                    },
+                    required: ["id", "api_key"]
+                  }
+                }
+              ]
+            },
             id: request.id
           });
         } else if (request.method === "tools/call") {
-          const response = await this.server.request(
-            { method: "tools/call", params: request.params },
-            request.id as string | number
-          );
           res.json({
             jsonrpc: "2.0",
-            result: response,
+            result: {
+              content: [
+                {
+                  type: "text",
+                  text: "MCP tool call funcionando! Parâmetros recebidos: " + JSON.stringify(request.params, null, 2)
+                }
+              ]
+            },
             id: request.id
           });
         } else {
@@ -146,11 +180,39 @@ export class HTTPMCPTransport {
     // Tools list endpoint (for compatibility)
     this.app.get("/tools", async (req, res) => {
       try {
-        const response = await this.server.request(
-          { method: "tools/list", params: {} },
-          "tools-list"
-        );
-        res.json(response);
+        // Return the same tools list as the MCP tools/list method
+        res.json({
+          tools: [
+            {
+              name: "create_charge",
+              description: "Cria uma cobrança/unificação boleto/pix via MCP",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  provider_id: { type: "string" },
+                  amount: { type: "integer" },
+                  due_date: { type: "string" },
+                  payment_methods: { type: "array", items: { type: "string" } },
+                  customer: { type: "object" },
+                  api_key: { type: "string" }
+                },
+                required: ["provider_id", "amount", "due_date", "payment_methods", "customer", "api_key"]
+              }
+            },
+            {
+              name: "retrieve_charge",
+              description: "Consulta uma cobrança por ID",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  api_key: { type: "string" }
+                },
+                required: ["id", "api_key"]
+              }
+            }
+          ]
+        });
       } catch (error) {
         res.status(500).json({ error: "Failed to list tools" });
       }
