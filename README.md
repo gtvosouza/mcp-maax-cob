@@ -1,246 +1,274 @@
-# MCP Server (MVP) — Pagamentos
+# 🚀 MCP MAAX COB - Sistema de Cobrança Unificada
 
-Este projeto implementa um MVP do **MCP (Modelo de Protocolo de Contexto)** descrito no seu documento, com foco em **REST HTTP**,
-**webhooks** e **multi-tenant**. Inclui **Docker**, **OpenAPI**, exemplos de payloads e um **adapter mock** para rodar end-to-end.
+Sistema de cobrança unificada que integra múltiplos bancos brasileiros através de um servidor **MCP (Model Context Protocol)** compatível com Claude Desktop e outras aplicações.
 
-> **Objetivo**: ser a **melhor documentação** para um **MCP client** integrar rápido e com segurança.
+## 🏦 Bancos Integrados
 
----
+### ✅ Funcionando 100%
+- **🏆 Cora** - API REST completa
+- **🏆 Banco do Brasil** - OAuth2 + Boletos + PIX  
+- **🏆 Sicredi** - OAuth2 + Boletos + PIX
+- **🔧 Mock** - Para desenvolvimento e testes
 
-## Sumário
-1. [Arquitetura](#arquitetura)
-2. [Subir com Docker](#subir-com-docker)
-3. [Autenticação](#autenticação)
-4. [Fluxos essenciais](#fluxos-essenciais)
-5. [Exemplos de requisição](#exemplos-de-requisição)
-6. [Webhooks](#webhooks)
-7. [Idempotência](#idempotência)
-8. [Paginação](#paginação)
-9. [Rate limit](#rate-limit)
-10. [Códigos de erro](#códigos-de-erro)
-11. [OpenAPI](#openapi)
-12. [Estrutura do projeto](#estrutura-do-projeto)
+### 🔄 Implementados (aguardando certificados)
+- **Itaú** - mTLS + Certificados
 
----
+## 📡 Protocolos Suportados
 
-## Arquitetura
-
-- **API**: Fastify + TypeScript (HTTP/JSON).
-- **DB**: PostgreSQL (UUID + JSON), via SQL simples (você pode trocar por Drizzle/Prisma).
-- **Cache/Idempotência**: Redis.
-- **Mensageria**: RabbitMQ (reservado p/ processamento de webhooks/retries—MVP usa HTTP direto).
-- **Adapters**: porta única (`PaymentProvider`) com implementação **mock** (simula um provedor).
-
-```txt
-Tenant → (Admin API Key) → [ Initialize Provider / API Key ] → (Public API Key) → Charges
-                                                       ↓
-                                                  Adapters (mock / bb / sicredi / ...)
-                                                       ↓
-                                                Webhooks assinados (HMAC)
-```
-
----
-
-## Subir com Docker
-
-1) Copie `.env.example` para `.env` e ajuste os segredos (recomendado trocar `ENCRYPTION_KEY_HEX` e `WEBHOOK_HMAC_SECRET`).  
-2) Rode:
-
+### REST API (Porta 3000)
+Compatível com aplicações existentes:
 ```bash
-docker compose up --build
+curl -X POST http://localhost:3000/v1/charges \
+  -H "X-Public-Api-Key: pk_..." \
+  -d '{"provider_id": "...", "amount": 1000}'
 ```
 
-API em `http://localhost:3000`.
+### MCP Server (Múltiplos Transportes)
+Compatible com Claude Desktop e outras aplicações MCP:
 
----
+- **STDIO** - Claude Desktop
+- **HTTP/SSE** - Aplicações web (porta 3001)
+- **WebSocket** - Real-time (porta 3002)
+- **Hybrid** - Todos simultaneamente
 
-## Autenticação
+## 🚀 Deploy Rápido
 
-- **Admin API Key**: Header `X-Admin-Api-Key`. Usada para operações administrativas (tenant/provider/api-keys/webhooks).
-- **Public API Key**: Header `X-Public-Api-Key`. Usada para operações de **charges**.
+### Docker Desktop (Recomendado)
+```bash
+# Clone o repositório
+git clone <repo-url>
+cd mcp-maax-cob
 
-Chaves são retornadas **apenas uma vez** na criação e devem ser guardadas pelo cliente.
+# Deploy automático
+./deploy-mcp.sh
+```
 
----
+### Desenvolvimento Local
+```bash
+# Instalar dependências
+npm install
 
-## Fluxos essenciais
+# REST API
+npm run dev
 
-### 1) Initialize Tenant
-`POST /v1/tenants/init` → retorna `tenant_id` + `admin_api_key`.
+# MCP Server
+npm run mcp:stdio    # Claude Desktop
+npm run mcp:http     # Web (porta 3001)
+npm run mcp:ws       # WebSocket (porta 3002)
+npm run mcp:hybrid   # Todos juntos
+```
 
-### 2) Initialize Provider
-`POST /v1/admin/providers` (header `X-Admin-Api-Key`) com:
+## 🔧 Configuração Claude Desktop
+
+### 1. Build do projeto
+```bash
+npm run build
+```
+
+### 2. Localizar arquivo de configuração
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`  
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+### 3. Adicionar configuração
 ```json
 {
-  "provider_type": "mock",
-  "friendly_name": "Conta Mock",
-  "credentials": { "token": "xyz" },
-  "provider_specific_config": { "carteira": "123", "convenio": "0001" }
-}
-```
-→ retorna `provider_id`.
-
-### 3) Criar Public API Key
-`POST /v1/admin/api-keys` (header `X-Admin-Api-Key`) → retorna `api_key` (prefixo `pk_...`).
-
-### 4) Criar cobrança (Charge)
-`POST /v1/charges` (header `X-Public-Api-Key`) indicando `provider_id` do passo 2.
-
----
-
-## Exemplos de requisição
-
-### CreateCharge
-```bash
-curl -X POST http://localhost:3000/v1/charges   -H "Content-Type: application/json"   -H "X-Public-Api-Key: pk_test_123"   -d '{
-    "provider_id": "f6d1a4b0-0000-0000-0000-000000000000",
-    "amount": 12990,
-    "due_date": "2025-09-10",
-    "reference_id": "PED-2025-0001",
-    "payment_methods": ["boleto", "pix"],
-    "customer": {
-      "name": "Cliente Exemplo",
-      "document": "12345678901",
-      "address": {"zip_code":"90000000","city":"Porto Alegre","state":"RS","street":"Rua X, 123"}
+  "mcpServers": {
+    "mcp-maax-cob": {
+      "command": "node",
+      "args": ["/caminho/para/mcp-maax-cob/dist/mcp.js"],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "POSTGRES_HOST": "localhost",
+        "POSTGRES_DB": "mcp",
+        "POSTGRES_USER": "mcpuser",
+        "POSTGRES_PASSWORD": "mcppass"
+      }
     }
-  }'
-```
-
-**Resposta** (exemplo):
-```json
-{
-  "id": "1b2c3d4e-...",
-  "provider_charge_id": "mock-99123",
-  "status": "PENDING",
-  "amount": 12990,
-  "due_date": "2025-09-10",
-  "payment_methods": ["boleto", "pix"],
-  "data": {
-    "digitable_line": "34191...",
-    "qr_code_text": "00020126..."
   }
 }
 ```
 
-### RetrieveCharge
-```bash
-curl -H "X-Public-Api-Key: pk_test_123" http://localhost:3000/v1/charges/1b2c3d4e-...
-```
-
-### ListCharges (cursor)
-```bash
-curl -H "X-Public-Api-Key: pk_test_123" "http://localhost:3000/v1/charges?limit=20&starting_after=cursorXYZ"
-```
-
-### ApplyInstruction
-```bash
-curl -X POST http://localhost:3000/v1/charges/1b2c3d4e-.../instructions   -H "Content-Type: application/json"   -H "X-Public-Api-Key: pk_test_123"   -d '{"instruction_type":"change_due_date","parameters":{"new_due_date":"2025-10-05"}}'
-```
-
----
-
-## Webhooks
-
-- Registre via `POST /v1/admin/webhooks` (admin key), passando `url` e `enabled_events`.
-- Eventos enviados com **`X-MCP-Signature: sha256=<hex>`** onde `<hex>` = HMAC_SHA256(body, `WEBHOOK_HMAC_SECRET`).
-
-**Verificação (Node):**
-```js
-import crypto from "node:crypto";
-const ok = crypto.timingSafeEqual(
-  Buffer.from(sigHeader.split("sha256=")[1], "hex"),
-  crypto.createHmac("sha256", process.env.WEBHOOK_HMAC_SECRET).update(rawBody).digest()
-);
-```
-
-Eventos (MVP):
-- `charge.created`
-- `charge.paid`
-- `charge.canceled`
-
-> Dica: Recomendamos retry exponencial (até 24h) quando a URL retornar 5xx/timeout.
-
----
-
-## Idempotência
-
-Envie `reference_id` em `CreateCharge`. O servidor garante idempotência por (`tenant_id`, `reference_id`).  
-Recomendado também usar cache Redis (`SETNX`) e índice único no banco.
-
----
-
-## Paginação
-
-Listagens usam **cursor**. Resposta inclui `next_cursor`; passe em `starting_after` para a próxima página.
-
----
-
-## Rate limit
-
-Header `X-RateLimit-Remaining` indica saldo do minuto corrente.  
-HTTP 429 quando excedido. Recomenda-se *backoff* exponencial.
-
----
-
-## Códigos de erro
-
-Formato padronizado:
+### 4. Com Docker
 ```json
 {
-  "error_code": "PROVIDER_UNAVAILABLE",
-  "message": "Sicredi API is down",
-  "details": ["timeout 10s"],
-  "trace_id": "req-abc123"
+  "mcpServers": {
+    "mcp-maax-cob": {
+      "command": "docker",
+      "args": ["exec", "-i", "mcp-maax-cob-mcp-1", "node", "dist/mcp.js"]
+    }
+  }
 }
 ```
-Erros comuns:
-- `AUTH_INVALID_KEY`
-- `TENANT_NOT_FOUND`
-- `PROVIDER_NOT_FOUND`
-- `IDEMPOTENCY_CONFLICT`
-- `PROVIDER_UNAVAILABLE`
-- `VALIDATION_ERROR`
-- `INTERNAL_ERROR`
 
----
+## 🛠️ Ferramentas MCP
 
-## OpenAPI
+O Claude Desktop terá acesso às seguintes ferramentas:
 
-O contrato está em [`openapi.yaml`](./openapi.yaml).  
-Você pode abrir no Swagger Editor ou ReDoc para visualizar.
+- **`create_charge`** - Criar cobrança/boleto/PIX
+- **`retrieve_charge`** - Consultar status de cobrança
+- **`list_charges`** - Listar cobranças com paginação
+- **`cancel_charge`** - Cancelar cobrança
+- **`apply_instruction`** - Aplicar instruções (mudança vencimento, etc.)
 
----
+## 📊 Exemplo de Uso no Claude
 
-## Estrutura do projeto
-
-```txt
-.
-├── openapi.yaml
-├── docker-compose.yml
-├── Dockerfile
-├── .env.example
-├── README.md
-├── CLAUDE.md
-└── src
-    ├── server.ts
-    ├── env.ts
-    ├── api
-    │   ├── auth.ts
-    │   ├── routes
-    │   │   ├── tenants.ts
-    │   │   ├── providers.ts
-    │   │   ├── apiKeys.ts
-    │   │   ├── charges.ts
-    │   │   └── webhooks.ts
-    │   └── schemas.ts
-    ├── core
-    │   └── types.ts
-    ├── adapters
-    │   ├── index.ts
-    │   └── mock.ts
-    └── infra
-        ├── db.ts
-        ├── crypto.ts
-        ├── idempotency.ts
-        └── redis.ts
 ```
+Crie uma cobrança de R$ 150,00 para João Silva (CPF: 12345678901) 
+com vencimento para 31/12/2025, aceitando boleto e PIX.
+```
+
+O Claude automaticamente usará a ferramenta `create_charge` com os parâmetros corretos.
+
+## 🏗️ Arquitetura
+
+```
+┌─────────────────────────────────────────┐
+│              Clientes                   │
+├─────────┬─────────┬─────────┬───────────┤
+│ Claude  │ Apps    │ REST    │ WebSocket │
+│Desktop  │ Web     │ API     │ Clients   │
+└────┬────┴────┬────┴────┬────┴─────┬─────┘
+     │ STDIO   │ HTTP    │ REST     │ WS
+     └─────────┼─────────┼──────────┘
+               ▼         ▼
+     ┌─────────────────────────────────────┐
+     │         MCP MAAX COB                │
+     │    (Servidor Unificado)             │
+     └─────────────┬───────────────────────┘
+                   ▼
+     ┌─────────────────────────────────────┐
+     │        Adapters Bancários           │
+     ├─────────┬─────────┬─────────────────┤
+     │  Cora   │   BB    │   Sicredi       │
+     └─────────┴─────────┴─────────────────┘
+```
+
+## 📚 Documentação
+
+- **[INSTALL-CLAUDE.md](INSTALL-CLAUDE.md)** - Instalação detalhada no Claude Desktop
+- **[README-MCP-DOCKER.md](README-MCP-DOCKER.md)** - Deploy completo no Docker
+- **[PRODUCTION.md](PRODUCTION.md)** - Configuração para produção
+- **[teste/README.md](teste/README.md)** - Scripts de teste e desenvolvimento
+
+## 🔒 Segurança
+
+- Criptografia AES-256 para credenciais
+- Rate limiting configurável
+- Headers de segurança (Helmet)
+- Validação de esquemas (Zod)
+- Logs estruturados
+- Health checks
+
+## 📦 Serviços Inclusos
+
+| Serviço | Porta | Descrição |
+|---------|-------|-----------|
+| **REST API** | 3000 | Servidor Fastify principal |
+| **MCP HTTP** | 3001 | Server-Sent Events |
+| **MCP WebSocket** | 3002 | WebSocket real-time |
+| **PostgreSQL** | 5432 | Banco de dados |
+| **Redis** | 6379 | Cache e sessões |
+| **RabbitMQ** | 5672, 15672 | Message queue + Management |
+
+## 🧪 Testando
+
+### Verificar instalação
+```bash
+# Health checks
+curl http://localhost:3000/health/ready
+curl http://localhost:3001/health
+
+# Inicializar sistema
+curl -X POST http://localhost:3000/v1/tenants/init
+```
+
+### Criar cobrança de teste
+```bash
+curl -X POST http://localhost:3000/v1/charges \
+  -H "X-Public-Api-Key: pk_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider_id": "mock-provider",
+    "amount": 10000,
+    "due_date": "2025-12-31",
+    "payment_methods": ["boleto", "pix"],
+    "customer": {
+      "name": "João Silva",
+      "document": "12345678901"
+    }
+  }'
+```
+
+## 🛠️ Comandos Úteis
+
+```bash
+# Desenvolvimento
+npm run dev          # REST API modo watch
+npm run mcp:stdio    # MCP para Claude Desktop
+npm run mcp:hybrid   # Todos os transportes MCP
+
+# Build e produção
+npm run build        # Compilar TypeScript
+npm start            # REST API produção
+
+# Docker
+./deploy-mcp.sh      # Deploy completo
+docker-compose -f docker-compose.mcp.yml logs -f
+
+# Testes
+cd teste/
+./test-mcp.sh       # Testar MCP
+```
+
+## 🐛 Troubleshooting
+
+### MCP não aparece no Claude
+1. Verificar se o build foi feito: `npm run build`
+2. Verificar caminho no `claude_desktop_config.json`
+3. Reiniciar Claude Desktop
+4. Verificar logs: `docker logs mcp-maax-cob-mcp-1`
+
+### Erro de banco
+1. Verificar PostgreSQL: `docker-compose ps`
+2. Verificar credenciais no `.env`
+3. Inicializar banco: `curl -X POST http://localhost:3000/v1/tenants/init`
+
+### Portas em uso
+```bash
+# Verificar portas ocupadas
+netstat -tlnp | grep -E ":(3000|3001|3002)"
+
+# Parar Docker se necessário
+docker-compose down
+```
+
+## 🎯 Próximos Passos
+
+1. **Certificados Itaú** - Completar integração mTLS
+2. **Mais bancos** - Integrar Bradesco, Santander, etc.
+3. **Webhooks** - Sistema de notificações em tempo real
+4. **Dashboard** - Interface web para monitoramento
+5. **Testes automatizados** - CI/CD pipeline
+
+## 📞 Suporte
+
+- **GitHub Issues** - Reportar bugs e solicitar features
+- **Documentação** - Arquivos markdown inclusos
+- **Logs** - `docker-compose logs -f` para debug
+
+---
+
+## 🎉 Resultado
+
+Com este sistema você terá:
+
+✅ **Integração com múltiplos bancos brasileiros**  
+✅ **Servidor MCP compatível com Claude Desktop**  
+✅ **REST API para aplicações existentes**  
+✅ **Deploy Docker completo e configurável**  
+✅ **Suporte a boletos e PIX**  
+✅ **Monitoramento e métricas**  
+✅ **Documentação completa**
+
+**Sistema de cobrança moderno, escalável e integrado com IA!** 🚀

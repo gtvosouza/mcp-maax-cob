@@ -105,7 +105,7 @@ keys/
 secrets/
 
 # Test files específicos do projeto
-teste-*.js
+teste/
 test-*.js
 
 # Backups
