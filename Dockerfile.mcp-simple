@@ -1,0 +1,37 @@
+# Dockerfile MCP Simples - Funcional
+FROM node:20-alpine
+
+# Instalar dependências do sistema
+RUN apk add --no-cache wget curl
+
+WORKDIR /app
+
+# Copiar package files
+COPY package*.json ./
+COPY tsconfig.json ./
+
+# Instalar TODAS as dependências
+RUN npm ci
+
+# Copiar código fonte
+COPY src/ ./src/
+COPY mcp.ts ./
+
+# Build
+RUN npm run build
+
+# Configurar para produção
+ENV NODE_ENV=production
+ENV MCP_TRANSPORT=http
+ENV MCP_HTTP_PORT=4004
+ENV MCP_WS_PORT=4005
+
+# Expor portas
+EXPOSE 4004 4005
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:4004/health || exit 1
+
+# Rodar com tsx (mais confiável)
+CMD ["npx", "tsx", "mcp.ts"]

@@ -1,12 +1,9 @@
 version: '3.8'
 
-name: mcp-maax-cob-lite
-
 services:
-  # PostgreSQL Database (necessário)
+  # PostgreSQL Database
   db:
     image: postgres:15-alpine
-    restart: unless-stopped
     environment:
       POSTGRES_DB: mcp
       POSTGRES_USER: mcpuser
@@ -14,28 +11,26 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mcpuser -d mcp"]
-      interval: 30s
-      timeout: 10s
+      interval: 10s
+      timeout: 5s
       retries: 5
 
-  # MCP Server (STDIO + HTTP/SSE + WebSocket)
+  # MCP Server
   mcp:
     build:
       context: .
-      dockerfile: Dockerfile.mcp
-      target: runtime
-    restart: unless-stopped
+      dockerfile: Dockerfile.mcp-simple
     depends_on:
       db:
         condition: service_healthy
     environment:
       NODE_ENV: production
-      MCP_TRANSPORT: http  # Mudando para HTTP que é mais fácil de testar
-      MCP_HTTP_PORT: 3001
-      MCP_WS_PORT: 3002
+      MCP_TRANSPORT: http
+      MCP_HTTP_PORT: 4004
+      MCP_WS_PORT: 4005
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
       POSTGRES_DB: mcp
@@ -45,19 +40,14 @@ services:
       WEBHOOK_HMAC_SECRET: mcp-webhook-secret-2025
       RATE_LIMIT: 120
     ports:
-      - "3001:3001"  # HTTP/SSE
-      - "3002:3002"  # WebSocket
-    stdin_open: true
-    tty: true
+      - "4004:4004"
+      - "4005:4005"
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "console.log('MCP healthy')"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4004/health"]
       interval: 30s
       timeout: 10s
       retries: 5
 
 volumes:
   postgres_data:
-
-networks:
-  default:
-    name: mcp-network-lite

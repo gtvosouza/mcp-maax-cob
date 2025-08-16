@@ -1,100 +1,97 @@
 #!/bin/bash
 
-# Deploy Script - MCP MAAX COB
-# Sobe todos os serviços com Docker Compose
+# ============================================
+#   MCP MAAX COB - Deploy Linux/Ubuntu
+#   Portas: 4004 (HTTP), 4005 (WS), 5433 (DB)
+# ============================================
 
-echo "🚀 DEPLOY MCP MAAX COB"
-echo "====================="
+echo ""
+echo "MCP MAAX COB - Deploy Linux"
+echo "====================================="
+echo ""
 
-# Verificar se Docker está disponível
-if ! command -v docker &> /dev/null; then
-    echo "❌ Docker não encontrado. Instale o Docker primeiro."
+# Verificar Docker
+if ! docker info > /dev/null 2>&1; then
+    echo "[ERRO] Docker não está rodando!"
+    echo "       Instale ou inicie o Docker e tente novamente."
+    echo ""
     exit 1
 fi
 
-if ! command -v docker-compose &> /dev/null && ! command -v docker compose &> /dev/null; then
-    echo "❌ Docker Compose não encontrado. Instale o Docker Compose primeiro."
+echo "[OK] Docker detectado"
+echo ""
+
+# Limpar ambiente
+echo "Limpando ambiente anterior..."
+docker-compose -f docker-compose-final.yml down > /dev/null 2>&1
+
+# Build
+echo "Construindo imagem MCP..."
+docker-compose -f docker-compose-final.yml build mcp
+if [ $? -ne 0 ]; then
+    echo "[ERRO] Falha no build"
     exit 1
 fi
 
-# Função para usar docker-compose ou docker compose
-docker_compose_cmd() {
-    if command -v docker-compose &> /dev/null; then
-        docker-compose "$@"
-    else
-        docker compose "$@"
-    fi
-}
-
-echo "📋 Verificando arquivos..."
-
-# Verificar se arquivos necessários existem
-if [ ! -f "Dockerfile" ]; then
-    echo "❌ Dockerfile não encontrado"
+# Deploy
+echo ""
+echo "Iniciando serviços..."
+docker-compose -f docker-compose-final.yml up -d
+if [ $? -ne 0 ]; then
+    echo "[ERRO] Falha ao iniciar serviços"
     exit 1
 fi
 
-if [ ! -f "docker-compose.yml" ]; then
-    echo "❌ docker-compose.yml não encontrado"
-    exit 1
+# Aguardar
+echo ""
+echo "Aguardando serviços (20 segundos)..."
+sleep 20
+
+# Status
+echo ""
+echo "Status dos serviços:"
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+# Testar
+echo ""
+echo "Testando MCP Server..."
+if curl -f -s http://localhost:4004/health > /dev/null 2>&1; then
+    echo "[OK] MCP Server funcionando!"
+else
+    echo "[AVISO] MCP ainda iniciando..."
 fi
 
-if [ ! -f ".env.docker" ]; then
-    echo "❌ .env.docker não encontrado"
-    exit 1
-fi
-
-echo "✅ Todos os arquivos necessários encontrados"
-
+# Informações
 echo ""
-echo "🛑 Parando containers existentes..."
-docker_compose_cmd down --volumes
-
+echo "====================================="
+echo "SERVIÇOS DISPONÍVEIS:"
+echo "====================================="
 echo ""
-echo "🔨 Fazendo build da aplicação..."
-npm run build
-
+echo "MCP Server:"
+echo "  Health: http://localhost:4004/health"
+echo "  Tools:  http://localhost:4004/tools"
+echo "  HTTP:   http://localhost:4004/mcp"
+echo "  WS:     ws://localhost:4005"
 echo ""
-echo "🐳 Fazendo build das imagens Docker..."
-docker_compose_cmd build --no-cache
-
+echo "PostgreSQL:"
+echo "  Host: localhost"
+echo "  Port: 5433"
+echo "  User: mcpuser"
+echo "  Pass: mcppass"
 echo ""
-echo "🚀 Subindo todos os serviços..."
-docker_compose_cmd up -d
-
+echo "COMANDOS ÚTEIS:"
+echo "  Ver logs:  docker-compose -f docker-compose-final.yml logs -f mcp"
+echo "  Parar:     docker-compose -f docker-compose-final.yml down"
+echo "  Reiniciar: docker-compose -f docker-compose-final.yml restart mcp"
 echo ""
-echo "⏳ Aguardando serviços iniciarem..."
-sleep 10
-
-echo ""
-echo "🔍 Verificando status dos serviços..."
-docker_compose_cmd ps
-
-echo ""
-echo "📊 Verificando logs da API..."
-docker_compose_cmd logs api --tail=20
-
-echo ""
-echo "🏥 Testando health check..."
-timeout 30 bash -c 'until curl -f http://localhost:3000/health/ready; do sleep 2; done' && echo "✅ API está rodando!" || echo "❌ API não respondeu"
-
-echo ""
-echo "🎉 DEPLOY CONCLUÍDO!"
-echo ""
-echo "📋 Serviços disponíveis:"
-echo "   🌐 API: http://localhost:3000"
-echo "   📊 Health: http://localhost:3000/health/ready"
-echo "   🗄️ PostgreSQL: localhost:5432"
-echo "   🔴 Redis: localhost:6379"
-echo "   🐰 RabbitMQ Management: http://localhost:15672"
-echo ""
-echo "📖 Comandos úteis:"
-echo "   docker compose logs api -f     # Ver logs da API"
-echo "   docker compose ps              # Status dos containers"
-echo "   docker compose down            # Parar tudo"
-echo "   docker compose restart api     # Reiniciar API"
-echo ""
-echo "🎯 Para testar as integrações:"
-echo "   curl http://localhost:3000/health/ready"
-echo "   curl http://localhost:3000/v1/tenants/init -X POST"
+echo "CLAUDE DESKTOP CONFIG:"
+echo '  {'
+echo '    "mcpServers": {'
+echo '      "mcp-maax-cob": {'
+echo '        "command": "docker",'
+echo '        "args": ["exec", "-i", "mcp-maax-cob-mcp-1", "node", "dist/mcp.js"],'
+echo '        "env": {"MCP_TRANSPORT": "stdio"}'
+echo '      }'
+echo '    }'
+echo '  }'
 echo ""
