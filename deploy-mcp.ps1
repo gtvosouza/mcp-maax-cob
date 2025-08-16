@@ -110,7 +110,8 @@ try {
     Write-Host "   ✅ Tenant inicializado" -ForegroundColor Green
     if ($response.admin_api_key) {
         $adminKey = $response.admin_api_key
-        Write-Host "   🔑 Admin Key: $($adminKey.Substring(0, 20))..." -ForegroundColor Cyan
+        $keyPreview = $adminKey.Substring(0, [Math]::Min(20, $adminKey.Length))
+        Write-Host "   🔑 Admin Key: $keyPreview..." -ForegroundColor Cyan
     }
 } catch {
     Write-Host "   ❌ Erro ao inicializar tenant" -ForegroundColor Red
