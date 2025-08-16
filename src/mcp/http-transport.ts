@@ -86,12 +86,64 @@ export class HTTPMCPTransport {
                   inputSchema: {
                     type: "object",
                     properties: {
-                      provider_id: { type: "string" },
-                      amount: { type: "integer" },
-                      due_date: { type: "string" },
-                      payment_methods: { type: "array", items: { type: "string" } },
-                      customer: { type: "object" },
-                      api_key: { type: "string" }
+                      provider_id: { type: "string", description: "ID do provedor de pagamento" },
+                      amount: { type: "integer", description: "Valor em centavos" },
+                      due_date: { type: "string", format: "date", description: "Data de vencimento (YYYY-MM-DD)" },
+                      reference_id: { type: "string", description: "ID de referência para idempotência" },
+                      payment_methods: {
+                        type: "array",
+                        items: { type: "string", enum: ["boleto", "pix"] },
+                        description: "Métodos de pagamento disponíveis"
+                      },
+                      customer: {
+                        type: "object",
+                        properties: {
+                          name: { type: "string" },
+                          document: { type: "string" },
+                          email: { type: "string" },
+                          phone: { type: "string" },
+                          address: {
+                            type: "object",
+                            properties: {
+                              street: { type: "string" },
+                              number: { type: "string" },
+                              complement: { type: "string" },
+                              district: { type: "string" },
+                              city: { type: "string" },
+                              state: { type: "string" },
+                              zipcode: { type: "string" }
+                            }
+                          }
+                        },
+                        required: ["name", "document"]
+                      },
+                      interest: {
+                        type: "object",
+                        properties: {
+                          type: { type: "string", enum: ["percentage", "fixed"] },
+                          value: { type: "number" },
+                          days_after_due: { type: "integer" }
+                        }
+                      },
+                      fine: {
+                        type: "object",
+                        properties: {
+                          type: { type: "string", enum: ["percentage", "fixed"] },
+                          value: { type: "number" }
+                        }
+                      },
+                      discounts: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            type: { type: "string", enum: ["percentage", "fixed"] },
+                            value: { type: "number" },
+                            days_before_due: { type: "integer" }
+                          }
+                        }
+                      },
+                      api_key: { type: "string", description: "Chave de API pública" }
                     },
                     required: ["provider_id", "amount", "due_date", "payment_methods", "customer", "api_key"]
                   }
@@ -102,10 +154,49 @@ export class HTTPMCPTransport {
                   inputSchema: {
                     type: "object",
                     properties: {
-                      id: { type: "string" },
-                      api_key: { type: "string" }
+                      id: { type: "string", description: "ID da cobrança" },
+                      api_key: { type: "string", description: "Chave de API pública" }
                     },
                     required: ["id", "api_key"]
+                  }
+                },
+                {
+                  name: "list_charges",
+                  description: "Lista cobranças com paginação por cursor",
+                  inputSchema: {
+                    type: "object",
+                    properties: {
+                      limit: { type: "integer", description: "Limite de resultados" },
+                      starting_after: { type: "string", description: "Cursor para paginação" },
+                      api_key: { type: "string", description: "Chave de API pública" }
+                    },
+                    required: ["api_key"]
+                  }
+                },
+                {
+                  name: "cancel_charge",
+                  description: "Cancela uma cobrança",
+                  inputSchema: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string", description: "ID da cobrança" },
+                      api_key: { type: "string", description: "Chave de API pública" }
+                    },
+                    required: ["id", "api_key"]
+                  }
+                },
+                {
+                  name: "apply_instruction",
+                  description: "Aplica instruções (ex.: mudança de vencimento)",
+                  inputSchema: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string", description: "ID da cobrança" },
+                      instruction_type: { type: "string", description: "Tipo de instrução" },
+                      parameters: { type: "object", description: "Parâmetros da instrução" },
+                      api_key: { type: "string", description: "Chave de API pública" }
+                    },
+                    required: ["id", "instruction_type", "api_key"]
                   }
                 }
               ]
@@ -189,12 +280,64 @@ export class HTTPMCPTransport {
               inputSchema: {
                 type: "object",
                 properties: {
-                  provider_id: { type: "string" },
-                  amount: { type: "integer" },
-                  due_date: { type: "string" },
-                  payment_methods: { type: "array", items: { type: "string" } },
-                  customer: { type: "object" },
-                  api_key: { type: "string" }
+                  provider_id: { type: "string", description: "ID do provedor de pagamento" },
+                  amount: { type: "integer", description: "Valor em centavos" },
+                  due_date: { type: "string", format: "date", description: "Data de vencimento (YYYY-MM-DD)" },
+                  reference_id: { type: "string", description: "ID de referência para idempotência" },
+                  payment_methods: {
+                    type: "array",
+                    items: { type: "string", enum: ["boleto", "pix"] },
+                    description: "Métodos de pagamento disponíveis"
+                  },
+                  customer: {
+                    type: "object",
+                    properties: {
+                      name: { type: "string" },
+                      document: { type: "string" },
+                      email: { type: "string" },
+                      phone: { type: "string" },
+                      address: {
+                        type: "object",
+                        properties: {
+                          street: { type: "string" },
+                          number: { type: "string" },
+                          complement: { type: "string" },
+                          district: { type: "string" },
+                          city: { type: "string" },
+                          state: { type: "string" },
+                          zipcode: { type: "string" }
+                        }
+                      }
+                    },
+                    required: ["name", "document"]
+                  },
+                  interest: {
+                    type: "object",
+                    properties: {
+                      type: { type: "string", enum: ["percentage", "fixed"] },
+                      value: { type: "number" },
+                      days_after_due: { type: "integer" }
+                    }
+                  },
+                  fine: {
+                    type: "object",
+                    properties: {
+                      type: { type: "string", enum: ["percentage", "fixed"] },
+                      value: { type: "number" }
+                    }
+                  },
+                  discounts: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        type: { type: "string", enum: ["percentage", "fixed"] },
+                        value: { type: "number" },
+                        days_before_due: { type: "integer" }
+                      }
+                    }
+                  },
+                  api_key: { type: "string", description: "Chave de API pública" }
                 },
                 required: ["provider_id", "amount", "due_date", "payment_methods", "customer", "api_key"]
               }
@@ -205,10 +348,49 @@ export class HTTPMCPTransport {
               inputSchema: {
                 type: "object",
                 properties: {
-                  id: { type: "string" },
-                  api_key: { type: "string" }
+                  id: { type: "string", description: "ID da cobrança" },
+                  api_key: { type: "string", description: "Chave de API pública" }
                 },
                 required: ["id", "api_key"]
+              }
+            },
+            {
+              name: "list_charges",
+              description: "Lista cobranças com paginação por cursor",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  limit: { type: "integer", description: "Limite de resultados" },
+                  starting_after: { type: "string", description: "Cursor para paginação" },
+                  api_key: { type: "string", description: "Chave de API pública" }
+                },
+                required: ["api_key"]
+              }
+            },
+            {
+              name: "cancel_charge",
+              description: "Cancela uma cobrança",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  id: { type: "string", description: "ID da cobrança" },
+                  api_key: { type: "string", description: "Chave de API pública" }
+                },
+                required: ["id", "api_key"]
+              }
+            },
+            {
+              name: "apply_instruction",
+              description: "Aplica instruções (ex.: mudança de vencimento)",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  id: { type: "string", description: "ID da cobrança" },
+                  instruction_type: { type: "string", description: "Tipo de instrução" },
+                  parameters: { type: "object", description: "Parâmetros da instrução" },
+                  api_key: { type: "string", description: "Chave de API pública" }
+                },
+                required: ["id", "instruction_type", "api_key"]
               }
             }
           ]
