@@ -16,6 +16,7 @@ RUN npm ci
 # Copiar código fonte
 COPY src/ ./src/
 COPY mcp.ts ./
+COPY mcp-http.ts ./
 
 # Build
 RUN npm run build
@@ -33,5 +34,5 @@ EXPOSE 4004 4005
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:4004/health || exit 1
 
-# Rodar com tsx (mais confiável)
-CMD ["npx", "tsx", "mcp.ts"]
+# Rodar com o novo transporte HTTP MCP
+CMD ["npx", "tsx", "mcp-http.ts"]

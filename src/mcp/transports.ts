@@ -78,18 +78,41 @@ export class MCPTransportManager {
 
     app.use(express.json());
 
-    // SSE endpoint handler
-    app.get("/mcp", async (req, res) => {
+    // Middleware para limpar URLs com caracteres invisíveis
+    app.use((req: any, res: any, next: any) => {
+      // Limpar caracteres invisíveis da URL
+      const cleanPath = req.path.replace(/[\u200B-\u200D\uFEFF]/g, '');
+      if (cleanPath !== req.path) {
+        console.error(`[MCP] URL com caracteres invisíveis detectada: ${req.path} -> ${cleanPath}`);
+        req.url = req.url.replace(req.path, cleanPath);
+        // Não podemos modificar req.path diretamente, mas o roteamento usará a URL limpa
+      }
+      next();
+    });
+
+    // SSE endpoint handler - múltiplas variações para compatibilidade
+    const mcpHandler = async (req: any, res: any) => {
+      console.error(`[MCP] Conexão SSE recebida em: ${req.path}`);
       const transport = new SSEServerTransport("/mcp", res);
       await this.server.connect(transport);
       await transport.start();
-    });
+    };
+
+    // Registrar handler para múltiplas variações
+    app.get("/mcp", mcpHandler);
+    app.get("/mcp/", mcpHandler);
+    app.get("/mcp⁠", mcpHandler); // Versão com caractere invisível comum
     
-    // POST handler para mensagens
-    app.post("/mcp", async (req, res) => {
+    // POST handler para mensagens - múltiplas variações
+    const postHandler = async (req: any, res: any) => {
+      console.error(`[MCP] POST recebido em: ${req.path}`);
       // As mensagens POST serão tratadas pelo transport SSE
       res.status(200).json({ status: "ok" });
-    });
+    };
+
+    app.post("/mcp", postHandler);
+    app.post("/mcp/", postHandler);
+    app.post("/mcp⁠", postHandler); // Versão com caractere invisível
 
     // Health check
     app.get("/health", (req, res) => {
@@ -110,6 +133,36 @@ export class MCPTransportManager {
           "cancel_charge",
           "apply_instruction"
         ]
+      });
+    });
+
+    // Endpoint de debug para URLs
+    app.get("/debug", (req, res) => {
+      res.json({
+        received_path: req.path,
+        received_url: req.url,
+        headers: req.headers,
+        query: req.query,
+        available_endpoints: [
+          "/health",
+          "/tools", 
+          "/mcp",
+          "/mcp/",
+          "/debug"
+        ],
+        note: "Use este endpoint para verificar problemas de URL"
+      });
+    });
+
+    // Catch-all para URLs similares a /mcp
+    app.all("/mcp*", (req, res) => {
+      console.error(`[MCP] Tentativa de acesso a variação de /mcp: ${req.path}`);
+      res.status(200).json({
+        message: "Endpoint MCP detectado com variação",
+        received_path: req.path,
+        clean_path: req.path.replace(/[\u200B-\u200D\uFEFF]/g, ''),
+        redirect_to: "/mcp",
+        try_again: "Use exatamente http://localhost:4004/mcp"
       });
     });
 

@@ -5,6 +5,7 @@ import {
   ErrorCode,
   ListToolsRequestSchema,
   McpError,
+  InitializeRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { ChargeRequest } from "../api/schemas";
 import { getPublicKey } from "../api/auth";
@@ -23,16 +24,31 @@ class MCPChargeServer {
       },
       {
         capabilities: {
-          tools: {},
+          tools: { 
+            listChanged: true 
+          },
         },
       }
     );
 
-    this.setupToolHandlers();
+    this.setupRequestHandlers();
     this.setupErrorHandling();
   }
 
-  private setupToolHandlers() {
+  private setupRequestHandlers() {
+    // Initialize request handler
+    this.server.setRequestHandler(InitializeRequestSchema, async (request) => {
+      return {
+        protocolVersion: "2024-11-05",
+        capabilities: {
+          tools: { listChanged: true }
+        },
+        serverInfo: {
+          name: "mcp-maax-cob",
+          version: "1.0.0"
+        }
+      };
+    });
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       return {
         tools: [
