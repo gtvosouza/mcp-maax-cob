@@ -215,6 +215,58 @@ paths:
         "202":
           description: Accepted
 
+  /v1/charges/{id}/cancel:
+    post:
+      summary: Cancel a charge
+      description: Cancels a charge if it's not already paid or cancelled. Support varies by payment provider.
+      security:
+        - PublicApiKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The charge ID
+      responses:
+        "200":
+          description: Charge cancelled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: ["CANCELLED"]
+                  cancelled_at:
+                    type: string
+                    format: date-time
+                  message:
+                    type: string
+        "400":
+          description: Cannot cancel charge
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Charge not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "501":
+          description: Cancellation not supported by payment provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /v1/admin/webhooks:
     post:
       summary: Register webhook endpoint

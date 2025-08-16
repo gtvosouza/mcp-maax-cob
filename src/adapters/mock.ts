@@ -19,4 +19,15 @@ export const mockAdapter: PaymentProviderAdapter = {
       data: { provider_charge_id },
     };
   },
+  async cancelCharge({ chargeId, providerChargeId }) {
+    // Mock always succeeds
+    return {
+      success: true,
+      data: {
+        cancelled_at: new Date().toISOString(),
+        provider_charge_id: providerChargeId,
+        status: "CANCELLED"
+      }
+    };
+  },
 };

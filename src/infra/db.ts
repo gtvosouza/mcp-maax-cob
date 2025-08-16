@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS charges (
   due_date DATE NOT NULL,
   paid_at TIMESTAMP,
   paid_amount INTEGER,
-  data JSONB DEFAULT '{}'::jsonb
+  data JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS webhook_endpoints (
   id UUID PRIMARY KEY,

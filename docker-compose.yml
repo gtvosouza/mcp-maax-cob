@@ -28,7 +28,7 @@ services:
       - db
       - redis
       - rabbitmq
-    env_file: .env.example
+    env_file: .env.docker
     ports:
       - "3000:3000"
 

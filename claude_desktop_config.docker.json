@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "mcp-maax-cob": {
+      "command": "docker",
+      "args": [
+        "exec", 
+        "-i", 
+        "mcp-maax-cob-mcp-1", 
+        "node", 
+        "dist/mcp.js"
+      ],
+      "env": {
+        "MCP_TRANSPORT": "stdio"
+      }
+    }
+  }
+}

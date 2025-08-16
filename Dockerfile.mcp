@@ -1,0 +1,57 @@
+# Dockerfile específico para MCP Server
+FROM node:20-alpine AS base
+
+# Instalar dependências do sistema
+RUN apk add --no-cache \
+    git \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/cache/apk/*
+
+WORKDIR /app
+
+# Copiar arquivos de dependências
+COPY package*.json ./
+COPY tsconfig.json ./
+
+# Instalar dependências
+RUN npm ci --only=production
+
+# Copiar código fonte
+COPY src/ ./src/
+COPY mcp.ts ./
+
+# Build da aplicação
+RUN npm run build
+
+# Imagem final - Alpine minimalista
+FROM node:20-alpine AS runtime
+
+# Criar usuário não-root
+RUN addgroup -g 1001 -S mcp && \
+    adduser -S mcp -u 1001
+
+WORKDIR /app
+
+# Copiar apenas os arquivos necessários
+COPY --from=base /app/dist ./dist
+COPY --from=base /app/node_modules ./node_modules
+COPY --from=base /app/package.json ./
+
+# Mudar para usuário não-root
+USER mcp
+
+# Expor portas (HTTP/SSE e WebSocket)
+EXPOSE 3001 3002
+
+# Configurar environment
+ENV NODE_ENV=production
+ENV MCP_TRANSPORT=hybrid
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD node -e "console.log('MCP Server healthy')" || exit 1
+
+# Comando padrão - rodar MCP em modo híbrido
+CMD ["node", "dist/mcp.js"]

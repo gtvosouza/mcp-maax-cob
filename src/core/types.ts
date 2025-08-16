@@ -1,4 +1,4 @@
-export type ChargeStatus = "PENDING" | "PAID" | "CANCELED";
+export type ChargeStatus = "PENDING" | "PAID" | "CANCELLED";
 
 export interface PaymentProviderAdapter {
   createCharge(input: {
@@ -17,5 +17,16 @@ export interface PaymentProviderAdapter {
   retrieveCharge(provider_charge_id: string): Promise<{
     status: ChargeStatus;
     data: Record<string, any>;
+  }>;
+
+  cancelCharge(input: {
+    tenantId: string;
+    providerId: string;
+    chargeId: string;
+    providerChargeId?: string;
+  }): Promise<{
+    success: boolean;
+    error?: string;
+    data?: Record<string, any>;
   }>;
 }
