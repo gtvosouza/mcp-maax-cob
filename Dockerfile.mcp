@@ -15,8 +15,8 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig.json ./
 
-# Instalar dependências
-RUN npm ci --only=production
+# Instalar TODAS as dependências (incluindo devDependencies para build)
+RUN npm ci
 
 # Copiar código fonte
 COPY src/ ./src/
@@ -24,6 +24,9 @@ COPY mcp.ts ./
 
 # Build da aplicação
 RUN npm run build
+
+# Remover devDependencies após o build
+RUN npm prune --production
 
 # Imagem final - Alpine minimalista
 FROM node:20-alpine AS runtime

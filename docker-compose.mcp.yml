@@ -94,6 +94,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.mcp
+      target: runtime
     restart: unless-stopped
     depends_on:
       db:
