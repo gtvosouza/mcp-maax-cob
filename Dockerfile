@@ -20,7 +20,6 @@ FROM base AS runtime
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json .
-ENV MCP_HTTP_PORT=4004
-ENV MCP_WS_PORT=4005
-EXPOSE 4004 4005
+ENV PORT=4004
+EXPOSE 4004
 CMD ["npm", "start"]

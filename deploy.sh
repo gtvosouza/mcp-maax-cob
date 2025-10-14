@@ -40,9 +40,7 @@ docker run -d \
   --network $NETWORK_NAME \
   -e TZ=America/Sao_Paulo \
   -e NODE_ENV=production \
-  -e MCP_TRANSPORT=hybrid \
-  -e MCP_HTTP_PORT=${APP_PORT} \
-  -e MCP_WS_PORT=${WS_PORT} \
+  -e PORT=${APP_PORT} \
   -e HOST=0.0.0.0 \
   -e LOG_LEVEL=info \
   -e MCP_TOKEN_SECRET=${MCP_TOKEN_SECRET} \
