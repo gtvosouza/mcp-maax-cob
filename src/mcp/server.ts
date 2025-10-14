@@ -213,15 +213,6 @@ class MCPChargeServer {
     // Build dynamic tools based on provider and credentials
     const allTools = [
           {
-            name: "get_providers_metadata",
-            description: "Obter metadados de todos os provedores disponíveis",
-            inputSchema: {
-              type: "object",
-              properties: {},
-              additionalProperties: false
-            }
-          },
-          {
             name: providerId === 'banco_do_brasil' ? 'extrato_conta_corrente' : 'get_account_statement',
             description: providerId === 'banco_do_brasil'
               ? 'Obtém extrato de conta corrente - Banco do Brasil (GET /extratos/v1/conta-corrente/agencia/{agencia}/conta/{conta})'
@@ -394,18 +385,17 @@ class MCPChargeServer {
 
         // Filter tools based on scopes
         const filteredTools = allTools.filter(tool => {
-          // Always include metadata tool
-          if (tool.name === 'get_providers_metadata') return true;
-
           // Include statement tool only if provider supports it
-          if (tool.name === 'get_account_statement') return canGetStatements;
+          if (tool.name === 'get_account_statement' || tool.name === 'extrato_conta_corrente') {
+            return canGetStatements;
+          }
 
           // Include charge tools only if provider supports them
           if (['create_charge', 'retrieve_charge', 'cancel_charge', 'apply_instruction'].includes(tool.name)) {
             return canCreateCharges;
           }
 
-          return true;
+          return false;
         });
 
         console.error(`[MCP] ✅ Filtered ${allTools.length} tools -> ${filteredTools.length} tools based on scopes`);
