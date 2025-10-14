@@ -23,4 +23,4 @@ COPY package.json .
 ENV MCP_HTTP_PORT=4004
 ENV MCP_WS_PORT=4005
 EXPOSE 4004 4005
-CMD ["node", "dist/server.js"]
+CMD ["npm", "start"]
