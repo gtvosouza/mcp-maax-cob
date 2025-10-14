@@ -118,11 +118,20 @@ export class MCPTransportManager {
       try {
         const decoded = jwt.verify(token, tokenSecret) as any;
 
+        // Validar company obrigatório
+        if (!decoded.company) {
+          console.error('[MCP] JWT missing required company field');
+          return res.status(403).json({
+            error: "Company is required for all operations",
+            code: "COMPANY_REQUIRED"
+          });
+        }
+
         // Adicionar dados decodificados ao request para uso posterior
         req.mcpAuth = {
           company: decoded.company,
-          provider: decoded.provider,
-          apiKey: decoded.credentials?.apiKey,
+          providerId: decoded.providerId,
+          credentials: decoded.credentials,
           meta: decoded.meta
         };
 
@@ -144,7 +153,7 @@ export class MCPTransportManager {
       console.error(`[MCP] 📡 GET /mcp - Abrindo stream SSE`);
       console.error(`[MCP] Auth:`, {
         company: req.mcpAuth?.company,
-        provider: req.mcpAuth?.provider
+        providerId: req.mcpAuth?.providerId
       });
 
       // Criar transport SSE para esta resposta
@@ -208,10 +217,13 @@ export class MCPTransportManager {
               const decoded = jwt.verify(token, tokenSecret) as any;
               credentials = decoded.credentials;
 
-              // Set provider and credentials context
+              // Set company, provider and credentials context
               if (this.mcpChargeServer) {
-                if (decoded.provider) {
-                  this.mcpChargeServer.setProviderContext(decoded.provider);
+                if (decoded.company) {
+                  this.mcpChargeServer.setCompanyContext(decoded.company);
+                }
+                if (decoded.providerId) {
+                  this.mcpChargeServer.setProviderContext(decoded.providerId);
                 }
                 if (credentials) {
                   this.mcpChargeServer.setCredentialsContext(credentials);
@@ -228,7 +240,7 @@ export class MCPTransportManager {
             try {
               // Pass credentials to discovery
               tools = await this.mcpChargeServer.discoverAvailableTools(credentials);
-              console.error(`[MCP] ✅ Discovery retornou ${tools.length} tools para provider ${req.mcpAuth?.provider}`);
+              console.error(`[MCP] ✅ Discovery retornou ${tools.length} tools para company ${req.mcpAuth?.company} provider ${req.mcpAuth?.providerId}`);
             } catch (err) {
               console.error('[MCP] ⚠️ Discovery failed, usando fallback:', err);
               tools = this.getFallbackTools();
@@ -254,8 +266,11 @@ export class MCPTransportManager {
             try {
               const decoded = jwt.verify(token, tokenSecret) as any;
               if (this.mcpChargeServer) {
-                if (decoded.provider) {
-                  this.mcpChargeServer.setProviderContext(decoded.provider);
+                if (decoded.company) {
+                  this.mcpChargeServer.setCompanyContext(decoded.company);
+                }
+                if (decoded.providerId) {
+                  this.mcpChargeServer.setProviderContext(decoded.providerId);
                 }
                 if (decoded.credentials) {
                   this.mcpChargeServer.setCredentialsContext(decoded.credentials);

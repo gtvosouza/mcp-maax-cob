@@ -152,6 +152,7 @@ async function getBancoDoBrasilScopes(credentials: any): Promise<string[]> {
 
 class MCPChargeServer {
   private server: Server;
+  private contextCompany?: string;
   private contextProviderId?: string;
   private contextCredentials?: Record<string, any>;
 
@@ -429,6 +430,15 @@ class MCPChargeServer {
   }
 
   /**
+   * Set company from external context (called by transport layer)
+   * SECURITY: This ensures all operations are scoped to a specific company
+   */
+  public setCompanyContext(company: string) {
+    this.contextCompany = company;
+    console.error(`[MCP] 🔒 Company context set: ${company}`);
+  }
+
+  /**
    * Set provider ID from external context (called by transport layer)
    */
   public setProviderContext(providerId: string) {
@@ -507,12 +517,20 @@ class MCPChargeServer {
   }
 
   public async handleGetAccountStatement(args: any) {
+    // SECURITY: Validate company context is set
+    if (!this.contextCompany) {
+      console.error('[MCP] ❌ SECURITY: Attempt to call handleGetAccountStatement without company');
+      throw new McpError(ErrorCode.InvalidParams, "Company context required for all operations");
+    }
+
     // Get provider from context (set by JWT)
     const providerId = this.getProviderFromContext();
 
     if (!providerId) {
       throw new McpError(ErrorCode.InvalidParams, "provider_id not found in context");
     }
+
+    console.error(`[MCP] 🔒 handleGetAccountStatement - Company: ${this.contextCompany}, Provider: ${providerId}`);
 
     const provider = providerInfo.find((info) => info.id === providerId);
 

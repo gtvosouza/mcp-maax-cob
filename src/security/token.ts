@@ -14,7 +14,8 @@ const tokenMetaSchema = z
 const basePayloadSchema = z.object({
   providerId: providerIdSchema,
   credentials: z.unknown(),
-  tenantId: z.string().min(1).optional(),
+  company: z.string().min(1).optional(),
+  tenantId: z.string().min(1).optional(), // Mantém para retrocompatibilidade
   meta: tokenMetaSchema,
   context: z.record(z.unknown()).optional(),
   iat: z.number().optional(),
@@ -31,7 +32,8 @@ export type TokenPayload = {
   [K in ProviderId]: {
     providerId: K;
     credentials: ProviderCredentialsMap[K];
-    tenantId?: string;
+    company?: string;
+    tenantId?: string; // Mantém para retrocompatibilidade
     meta?: TokenMeta;
     context?: Record<string, unknown>;
     iat?: number;
