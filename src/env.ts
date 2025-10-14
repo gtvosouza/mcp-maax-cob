@@ -21,6 +21,10 @@ const envSchema = z
     isProduction: value.NODE_ENV === "production"
   }));
 
+// Debug: Log MCP_TOKEN_SECRET from process.env
+console.error(`[ENV DEBUG] MCP_TOKEN_SECRET from process.env: "${process.env.MCP_TOKEN_SECRET}"`);
+console.error(`[ENV DEBUG] MCP_TOKEN_SECRET length: ${process.env.MCP_TOKEN_SECRET?.length || 0}`);
+
 const parsed = envSchema.safeParse(process.env);
 
 if (!parsed.success) {
