@@ -44,11 +44,27 @@ export async function registerMcpRoute(app: FastifyInstance): Promise<void> {
           const token = extractBearerToken(authHeader);
           const tokenSecret = app.appContext.env.mcpTokenSecret;
 
+          app.log.info({
+            hasAuthHeader: !!authHeader,
+            hasToken: !!token,
+            tokenLength: token?.length,
+            tokenPreview: token ? `${token.substring(0, 20)}...` : null,
+            secretConfigured: !!tokenSecret,
+            secretLength: tokenSecret?.length,
+            secretPreview: tokenSecret ? `${tokenSecret.substring(0, 10)}...` : null
+          }, "JWT Debug Info");
+
           let credentials: Record<string, any> | undefined;
           if (token && tokenSecret) {
             try {
               const decoded = jwt.verify(token, tokenSecret) as any;
               credentials = decoded.credentials;
+
+              app.log.info({
+                provider: decoded.provider,
+                company: decoded.company,
+                hasCredentials: !!credentials
+              }, "JWT decoded successfully");
 
               // Set provider and credentials context
               if (decoded.provider) {
@@ -61,8 +77,10 @@ export async function registerMcpRoute(app: FastifyInstance): Promise<void> {
                 mcpServer.setCredentialsContext(credentials);
               }
             } catch (err) {
-              app.log.warn({ err }, "Failed to decode JWT for credentials");
+              app.log.warn({ err, tokenSecret }, "Failed to decode JWT for credentials");
             }
+          } else {
+            app.log.warn({ hasToken: !!token, hasSecret: !!tokenSecret }, "Missing token or secret");
           }
 
           // Now discover tools based on credentials
