@@ -17,8 +17,7 @@ async function start() {
       host: env.host,
       mcpTokenSecretConfigured: !!env.mcpTokenSecret,
       mcpTokenSecretLength: env.mcpTokenSecret?.length,
-      mcpTokenSecretPreview: env.mcpTokenSecret ? `${env.mcpTokenSecret.substring(0, 15)}...` : null,
-      redisUrl: env.redisUrl
+      mcpTokenSecretPreview: env.mcpTokenSecret ? `${env.mcpTokenSecret.substring(0, 15)}...` : null
     }, "MCP Configuration");
   } catch (error) {
     app.log.error({ err: error }, "Failed to start MCP MAAX COB server");
