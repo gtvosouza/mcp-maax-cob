@@ -20,6 +20,8 @@ FROM base AS runtime
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json .
+# Copy mTLS certificates for Banco do Brasil
+COPY certs ./certs
 ENV PORT=4004
 EXPOSE 4004
 CMD ["npm", "start"]
