@@ -7,7 +7,7 @@ services:
       - PORT=4004
       - HOST=0.0.0.0
       - LOG_LEVEL=info
-      - MCP_TOKEN_SECRET=${MCP_TOKEN_SECRET:-dev-maax-cob-secret}
+      - MCP_TOKEN_SECRET=${MCP_TOKEN_SECRET:-dev-maax-cob-secret-change-in-production}
       - REDIS_URL=redis://redis:6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - ENCRYPTION_KEY_HEX=${ENCRYPTION_KEY_HEX:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}

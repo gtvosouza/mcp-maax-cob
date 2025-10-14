@@ -23,6 +23,7 @@ services:
       MCP_TRANSPORT: http
       MCP_HTTP_PORT: 4004
       MCP_WS_PORT: 4005
+      MCP_TOKEN_SECRET: ${MCP_TOKEN_SECRET:-dev-maax-cob-secret-change-in-production}
       REDIS_URL: redis://redis:6379
       ENCRYPTION_KEY_HEX: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       WEBHOOK_HMAC_SECRET: mcp-webhook-secret-2025
