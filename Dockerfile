@@ -1,33 +1,26 @@
-# --- Builder ---
-FROM node:20-alpine AS builder
-WORKDIR /app
-COPY package.json package-lock.json* pnpm-lock.yaml* yarn.lock* ./
-# Install with npm by default
-RUN if [ -f package-lock.json ]; then npm ci;     elif [ -f pnpm-lock.yaml ]; then npm i -g pnpm && pnpm i --frozen-lockfile;     elif [ -f yarn.lock ]; then yarn install --frozen-lockfile;     else npm i; fi
-COPY . .
-RUN npm run build
+# syntax=docker/dockerfile:1.7
 
-# --- Runner ---
-FROM node:20-alpine
+FROM node:20-alpine AS base
 WORKDIR /app
 ENV NODE_ENV=production
 
-# Add non-root user for security
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S mcp -u 1001
+FROM base AS deps
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
+FROM node:20-alpine AS build
+WORKDIR /app
+ENV NODE_ENV=development
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . ./
+RUN npm run build
+
+FROM base AS runtime
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
 COPY package.json .
-
-# Change ownership to non-root user
-RUN chown -R mcp:nodejs /app
-USER mcp
-
-EXPOSE 3000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000/health/ready', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"
-
+ENV MCP_HTTP_PORT=4004
+ENV MCP_WS_PORT=4005
+EXPOSE 4004 4005
 CMD ["node", "dist/server.js"]

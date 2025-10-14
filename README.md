@@ -16,11 +16,12 @@ Sistema de cobrança unificada que integra múltiplos bancos brasileiros atravé
 ## 📡 Protocolos Suportados
 
 ### REST API (Porta 3000)
-Compatível com aplicações existentes:
+Compatível com aplicações existentes usando tokens Bearer:
 ```bash
 curl -X POST http://localhost:3000/v1/charges \
-  -H "X-Public-Api-Key: pk_..." \
-  -d '{"provider_id": "...", "amount": 1000}'
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 1000, "due_date": "2025-12-31", "payment_methods": ["boleto"], "customer": {"name": "Cliente", "document": "12345678901"}}'
 ```
 
 ### MCP Server (Múltiplos Transportes)
@@ -79,10 +80,8 @@ npm run build
       "args": ["/caminho/para/mcp-maax-cob/dist/mcp.js"],
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "POSTGRES_HOST": "localhost",
-        "POSTGRES_DB": "mcp",
-        "POSTGRES_USER": "mcpuser",
-        "POSTGRES_PASSWORD": "mcppass"
+        "REDIS_URL": "redis://localhost:6379",
+        "MCP_TOKEN_SECRET": "change-me"
       }
     }
   }
@@ -167,9 +166,7 @@ O Claude automaticamente usará a ferramenta `create_charge` com os parâmetros 
 | **REST API** | 3000 | Servidor Fastify principal |
 | **MCP HTTP** | 3001 | Server-Sent Events |
 | **MCP WebSocket** | 3002 | WebSocket real-time |
-| **PostgreSQL** | 5432 | Banco de dados |
 | **Redis** | 6379 | Cache e sessões |
-| **RabbitMQ** | 5672, 15672 | Message queue + Management |
 
 ## 🧪 Testando
 
@@ -179,17 +176,14 @@ O Claude automaticamente usará a ferramenta `create_charge` com os parâmetros 
 curl http://localhost:3000/health/ready
 curl http://localhost:3001/health
 
-# Inicializar sistema
-curl -X POST http://localhost:3000/v1/tenants/init
 ```
 
 ### Criar cobrança de teste
 ```bash
 curl -X POST http://localhost:3000/v1/charges \
-  -H "X-Public-Api-Key: pk_..." \
+  -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "provider_id": "mock-provider",
     "amount": 10000,
     "due_date": "2025-12-31",
     "payment_methods": ["boleto", "pix"],
@@ -228,11 +222,6 @@ cd teste/
 2. Verificar caminho no `claude_desktop_config.json`
 3. Reiniciar Claude Desktop
 4. Verificar logs: `docker logs mcp-maax-cob-mcp-1`
-
-### Erro de banco
-1. Verificar PostgreSQL: `docker-compose ps`
-2. Verificar credenciais no `.env`
-3. Inicializar banco: `curl -X POST http://localhost:3000/v1/tenants/init`
 
 ### Portas em uso
 ```bash

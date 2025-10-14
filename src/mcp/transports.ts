@@ -6,6 +6,8 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import express from "express";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
+import jwt from "jsonwebtoken";
+import { extractBearerToken } from "../utils/auth.js";
 
 /**
  * Configuração de transportes MCP
@@ -14,10 +16,12 @@ import { WebSocketServer } from "ws";
 
 export class MCPTransportManager {
   private server: Server;
+  private mcpChargeServer: any; // MCPChargeServer instance
   private transportType: string;
 
-  constructor(server: Server) {
+  constructor(server: Server, mcpChargeServer?: any) {
     this.server = server;
+    this.mcpChargeServer = mcpChargeServer;
     this.transportType = process.env.MCP_TRANSPORT || "stdio";
   }
 
@@ -90,36 +94,265 @@ export class MCPTransportManager {
       next();
     });
 
-    // SSE endpoint handler - múltiplas variações para compatibilidade
-    const mcpHandler = async (req: any, res: any) => {
-      console.error(`[MCP] Conexão SSE recebida em: ${req.path}`);
+    // Middleware de autenticação JWT Bearer Token
+    const validateJwtToken = (req: any, res: any, next: any) => {
+      const authHeader = req.headers['authorization'];
+      const token = extractBearerToken(authHeader);
+
+      if (!token) {
+        return res.status(401).json({
+          error: "Invalid or missing Bearer token",
+          code: "UNAUTHORIZED"
+        });
+      }
+
+      const tokenSecret = process.env.MCP_TOKEN_SECRET;
+      if (!tokenSecret) {
+        console.error('[MCP] MCP_TOKEN_SECRET not configured');
+        return res.status(500).json({
+          error: "Server authentication not configured",
+          code: "SERVER_ERROR"
+        });
+      }
+
+      try {
+        const decoded = jwt.verify(token, tokenSecret) as any;
+
+        // Adicionar dados decodificados ao request para uso posterior
+        req.mcpAuth = {
+          company: decoded.company,
+          provider: decoded.provider,
+          apiKey: decoded.credentials?.apiKey,
+          meta: decoded.meta
+        };
+
+        next();
+      } catch (error: any) {
+        console.error('[MCP] JWT verification failed:', error.message);
+        return res.status(401).json({
+          error: "Invalid or expired token",
+          code: "UNAUTHORIZED"
+        });
+      }
+    };
+
+    // Armazenar transports SSE ativos por sessionId
+    const activeTransports = new Map<string, any>();
+
+    // GET /mcp - Abrir stream SSE
+    app.get("/mcp", validateJwtToken, async (req: any, res: any) => {
+      console.error(`[MCP] 📡 GET /mcp - Abrindo stream SSE`);
+      console.error(`[MCP] Auth:`, {
+        company: req.mcpAuth?.company,
+        provider: req.mcpAuth?.provider
+      });
+
+      // Criar transport SSE para esta resposta
       const transport = new SSEServerTransport("/mcp", res);
+
+      // Conectar servidor a este transport
       await this.server.connect(transport);
+
+      // Iniciar o stream SSE
       await transport.start();
-    };
 
-    // Registrar handler para múltiplas variações
-    app.get("/mcp", mcpHandler);
-    app.get("/mcp/", mcpHandler);
-    app.get("/mcp⁠", mcpHandler); // Versão com caractere invisível comum
-    
-    // POST handler para mensagens - múltiplas variações
-    const postHandler = async (req: any, res: any) => {
-      console.error(`[MCP] POST recebido em: ${req.path}`);
-      // As mensagens POST serão tratadas pelo transport SSE
-      res.status(200).json({ status: "ok" });
-    };
+      // Armazenar transport pelo sessionId do SDK
+      const sessionId = transport.sessionId;
+      activeTransports.set(sessionId, transport);
 
-    app.post("/mcp", postHandler);
-    app.post("/mcp/", postHandler);
-    app.post("/mcp⁠", postHandler); // Versão com caractere invisível
+      console.error(`[MCP] ✅ SSE stream aberto - SessionID: ${sessionId}`);
+
+      // Limpar quando a conexão fechar
+      req.on('close', () => {
+        console.error(`[MCP] ❌ SSE stream fechado - SessionID: ${sessionId}`);
+        activeTransports.delete(sessionId);
+      });
+    });
+
+    // POST /mcp - Receber mensagens MCP (modo stateless ou SSE)
+    app.post("/mcp", validateJwtToken, async (req: any, res: any) => {
+      console.error(`[MCP] 📨 POST /mcp - Mensagem recebida`);
+      console.error(`[MCP] Corpo:`, JSON.stringify(req.body));
+
+      const message = req.body;
+
+      // Processar mensagem JSON-RPC diretamente (modo stateless)
+      try {
+        let response: any;
+
+        if (message.method === 'initialize') {
+          response = {
+            jsonrpc: "2.0",
+            id: message.id,
+            result: {
+              protocolVersion: "2024-11-05",
+              capabilities: {
+                tools: { listChanged: true }
+              },
+              serverInfo: {
+                name: "mcp-maax-cob",
+                version: "2.0.0"
+              }
+            }
+          };
+          console.error(`[MCP] ✅ Respondendo initialize`);
+        } else if (message.method === 'tools/list') {
+          // Extract credentials from JWT payload first
+          const authHeader = req.headers['authorization'];
+          const token = extractBearerToken(authHeader);
+          const tokenSecret = process.env.MCP_TOKEN_SECRET;
+
+          let credentials: Record<string, any> | undefined;
+          if (token && tokenSecret) {
+            try {
+              const decoded = jwt.verify(token, tokenSecret) as any;
+              credentials = decoded.credentials;
+
+              // Set provider and credentials context
+              if (this.mcpChargeServer) {
+                if (decoded.provider) {
+                  this.mcpChargeServer.setProviderContext(decoded.provider);
+                }
+                if (credentials) {
+                  this.mcpChargeServer.setCredentialsContext(credentials);
+                }
+              }
+            } catch (err) {
+              console.error('[MCP] ⚠️ Failed to decode JWT for credentials:', err);
+            }
+          }
+
+          // Call dynamic discovery from MCPChargeServer
+          let tools: any[] = [];
+          if (this.mcpChargeServer && typeof this.mcpChargeServer.discoverAvailableTools === 'function') {
+            try {
+              // Pass credentials to discovery
+              tools = await this.mcpChargeServer.discoverAvailableTools(credentials);
+              console.error(`[MCP] ✅ Discovery retornou ${tools.length} tools para provider ${req.mcpAuth?.provider}`);
+            } catch (err) {
+              console.error('[MCP] ⚠️ Discovery failed, usando fallback:', err);
+              tools = this.getFallbackTools();
+            }
+          } else {
+            console.error('[MCP] ⚠️ MCPChargeServer não disponível, usando fallback');
+            tools = this.getFallbackTools();
+          }
+
+          response = {
+            jsonrpc: "2.0",
+            id: message.id,
+            result: { tools }
+          };
+          console.error(`[MCP] ✅ Respondendo tools/list com ${tools.length} tools`);
+        } else if (message.method === 'tools/call') {
+          // Set provider and credentials context from JWT
+          const authHeader = req.headers['authorization'];
+          const token = extractBearerToken(authHeader);
+          const tokenSecret = process.env.MCP_TOKEN_SECRET;
+
+          if (token && tokenSecret) {
+            try {
+              const decoded = jwt.verify(token, tokenSecret) as any;
+              if (this.mcpChargeServer) {
+                if (decoded.provider) {
+                  this.mcpChargeServer.setProviderContext(decoded.provider);
+                }
+                if (decoded.credentials) {
+                  this.mcpChargeServer.setCredentialsContext(decoded.credentials);
+                }
+              }
+            } catch (err) {
+              console.error('[MCP] ⚠️ Failed to decode JWT for tools/call:', err);
+            }
+          }
+
+          // Forward the call to the MCP server's request handler
+          const toolName = message.params?.name;
+          const toolArgs = message.params?.arguments || {};
+
+          console.error(`[MCP] 📞 tools/call - Tool: ${toolName}`);
+          console.error(`[MCP] 📞 Arguments:`, JSON.stringify(toolArgs, null, 2));
+
+          try {
+            // Call the tool handler directly
+            let result;
+            if (this.mcpChargeServer) {
+              switch (toolName) {
+                case 'get_providers_metadata':
+                  result = await this.mcpChargeServer.handleGetProvidersMetadata();
+                  break;
+                case 'get_account_statement':
+                case 'extrato_conta_corrente':
+                  result = await this.mcpChargeServer.handleGetAccountStatement(toolArgs);
+                  break;
+                case 'create_charge':
+                  result = await this.mcpChargeServer.handleCreateCharge(toolArgs);
+                  break;
+                case 'retrieve_charge':
+                  result = await this.mcpChargeServer.handleRetrieveCharge(toolArgs);
+                  break;
+                case 'cancel_charge':
+                  result = await this.mcpChargeServer.handleCancelCharge(toolArgs);
+                  break;
+                case 'apply_instruction':
+                  result = await this.mcpChargeServer.handleApplyInstruction(toolArgs);
+                  break;
+                default:
+                  throw new Error(`Unknown tool: ${toolName}`);
+              }
+
+              response = {
+                jsonrpc: "2.0",
+                id: message.id,
+                result
+              };
+              console.error(`[MCP] ✅ Tool ${toolName} executada com sucesso`);
+            } else {
+              throw new Error('MCP server not available');
+            }
+          } catch (error: any) {
+            console.error(`[MCP] ❌ Error executing tool ${toolName}:`, error);
+            response = {
+              jsonrpc: "2.0",
+              id: message.id,
+              error: {
+                code: -32603,
+                message: error.message || 'Tool execution failed'
+              }
+            };
+          }
+        } else {
+          response = {
+            jsonrpc: "2.0",
+            id: message.id,
+            error: {
+              code: -32601,
+              message: `Method not found: ${message.method}`
+            }
+          };
+          console.error(`[MCP] ⚠️ Método desconhecido: ${message.method}`);
+        }
+
+        res.status(200).json(response);
+      } catch (error: any) {
+        console.error(`[MCP] ❌ Erro ao processar mensagem:`, error.message);
+        res.status(500).json({
+          jsonrpc: "2.0",
+          id: message.id,
+          error: {
+            code: -32603,
+            message: `Internal error: ${error.message}`
+          }
+        });
+      }
+    });
 
     // Health check
     app.get("/health", (req, res) => {
       res.json({ 
         status: "ok", 
         transport: "http/sse",
-        mcp_version: "1.0.0"
+        mcp_version: "2.0.0"
       });
     });
 
@@ -127,9 +360,10 @@ export class MCPTransportManager {
     app.get("/tools", async (req, res) => {
       res.json({
         tools: [
+          "get_providers_metadata",
+          "get_account_statement",
           "create_charge",
           "retrieve_charge", 
-          "list_charges",
           "cancel_charge",
           "apply_instruction"
         ]
@@ -288,6 +522,61 @@ export class MCPTransportManager {
     });
 
     console.error("[MCP] Modo híbrido ativo - todos os transportes disponíveis");
+  }
+
+  /**
+   * Fallback tools list (all tools without filtering)
+   */
+  private getFallbackTools() {
+    return [
+      {
+        name: "get_providers_metadata",
+        description: "Obter metadados de todos os provedores disponíveis",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false }
+      },
+      {
+        name: "get_account_statement",
+        description: "Obtém extrato bancário para provedores suportados (ex.: Banco do Brasil)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            provider_id: { type: "string", description: "ID do provedor" },
+            agency: { type: "string", description: "Agência sem dígito" },
+            account: { type: "string", description: "Conta sem dígito" },
+            query: {
+              type: "object",
+              properties: {
+                page: { type: "integer" },
+                page_size: { type: "integer" },
+                start_date: { type: "string", description: "DDMMAAAA" },
+                end_date: { type: "string", description: "DDMMAAAA" }
+              }
+            }
+          },
+          required: ["provider_id"]
+        }
+      },
+      {
+        name: "create_charge",
+        description: "Cria uma nova cobrança (boleto ou PIX)",
+        inputSchema: { type: "object", properties: { provider_id: { type: "string" } }, required: ["provider_id"] }
+      },
+      {
+        name: "retrieve_charge",
+        description: "Consulta detalhes de uma cobrança existente",
+        inputSchema: { type: "object", properties: { provider_id: { type: "string" }, charge_id: { type: "string" } }, required: ["provider_id", "charge_id"] }
+      },
+      {
+        name: "cancel_charge",
+        description: "Cancela uma cobrança existente",
+        inputSchema: { type: "object", properties: { provider_id: { type: "string" }, charge_id: { type: "string" } }, required: ["provider_id", "charge_id"] }
+      },
+      {
+        name: "apply_instruction",
+        description: "Aplica instrução bancária (protesto, baixa, etc.)",
+        inputSchema: { type: "object", properties: { provider_id: { type: "string" }, charge_id: { type: "string" }, instruction_code: { type: "string" } }, required: ["provider_id", "charge_id", "instruction_code"] }
+      }
+    ];
   }
 
   private cloneServer(): Server {

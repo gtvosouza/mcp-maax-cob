@@ -1,36 +1,40 @@
-version: "3.9"
 services:
-  db:
-    image: postgres:16
+  app:
+    build: .
+    image: mcp-maax-cob:latest
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-mcpuser}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mcppass}
-      POSTGRES_DB: ${POSTGRES_DB:-mcp}
+      - NODE_ENV=production
+      - MCP_TRANSPORT=hybrid
+      - MCP_HTTP_PORT=4004
+      - MCP_WS_PORT=4005
+      - HOST=0.0.0.0
+      - LOG_LEVEL=info
+      - MCP_TOKEN_SECRET=${MCP_TOKEN_SECRET:-dev-maax-cob-secret}
+      - REDIS_URL=redis://redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - ENCRYPTION_KEY_HEX=${ENCRYPTION_KEY_HEX:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      - WEBHOOK_HMAC_SECRET=${WEBHOOK_HMAC_SECRET:-mcp-webhook-secret-2025}
+      - RATE_LIMIT=120
     ports:
-      - "5432:5432"
-    volumes:
-      - db-data:/var/lib/postgresql/data
+      - "4004:4004"
+      - "4005:4005"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     ports:
       - "6379:6379"
-
-  rabbitmq:
-    image: rabbitmq:3-management
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-
-  api:
-    build: .
-    depends_on:
-      - db
-      - redis
-      - rabbitmq
-    env_file: .env.docker
-    ports:
-      - "3000:3000"
+    volumes:
+      - redis-data:/data
 
 volumes:
-  db-data:
+  redis-data:

@@ -1,14 +1,28 @@
-import { mockAdapter } from "./mock";
 import { CoraAdapter } from "./cora";
 import { SicrediAdapter } from "./sicredi";
 import { BancoBrasilAdapter } from "./bancoBrasil";
 import { ItauAdapter } from "./itau";
 import { PaymentProviderAdapter } from "../core/types";
+import { encryptJson } from "../infra/crypto";
+
+/**
+ * Creates an adapter with plain (decrypted) credentials
+ * Used when credentials come from JWT (already decrypted)
+ */
+export function getAdapterWithPlainCredentials(
+  provider_type: string,
+  credentials: Record<string, any>,
+  config: Record<string, any> = {}
+): PaymentProviderAdapter {
+  // Encrypt credentials before passing to adapter
+  const credentialsEncrypted = encryptJson(credentials);
+  const configEncrypted = encryptJson(config);
+
+  return getAdapter(provider_type, credentialsEncrypted, configEncrypted);
+}
 
 export function getAdapter(provider_type: string, credentialsEncrypted?: string, configEncrypted?: string): PaymentProviderAdapter {
   switch (provider_type) {
-    case "mock":
-      return mockAdapter;
     case "cora":
       if (!credentialsEncrypted || !configEncrypted) {
         throw new Error("Cora adapter requires encrypted credentials and config");

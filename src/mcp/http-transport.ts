@@ -161,7 +161,6 @@ export class HTTPMCPTransport {
                   }
                 },
                 {
-                  name: "list_charges",
                   description: "Lista cobranças com paginação por cursor",
                   inputSchema: {
                     type: "object",
@@ -204,18 +203,58 @@ export class HTTPMCPTransport {
             id: request.id
           });
         } else if (request.method === "tools/call") {
-          res.json({
-            jsonrpc: "2.0",
-            result: {
-              content: [
-                {
-                  type: "text",
-                  text: "MCP tool call funcionando! Parâmetros recebidos: " + JSON.stringify(request.params, null, 2)
-                }
-              ]
-            },
-            id: request.id
-          });
+          // Executar a chamada real da ferramenta via servidor MCP
+          try {
+            const toolName = request.params?.name;
+            const toolArgs = request.params?.arguments ?? {};
+
+            console.error(`[MCP] Executing tool: ${toolName} with args:`, toolArgs);
+
+            const { MCPChargeServer } = await import('./server.js');
+            const mcpServer = new MCPChargeServer();
+
+            let result;
+            switch (toolName) {
+              case "get_providers_metadata":
+                result = await mcpServer.handleGetProvidersMetadata();
+                break;
+              case "get_account_statement":
+                result = await mcpServer.handleGetAccountStatement(toolArgs);
+                break;
+              case "create_charge":
+                result = await mcpServer.handleCreateCharge(toolArgs);
+                break;
+              case "retrieve_charge":
+                result = await mcpServer.handleRetrieveCharge(toolArgs);
+                break;
+              case "cancel_charge":
+                result = await mcpServer.handleCancelCharge(toolArgs);
+                break;
+              case "apply_instruction":
+                result = await mcpServer.handleApplyInstruction(toolArgs);
+                break;
+              default:
+                throw new Error(`Unknown tool: ${toolName}`);
+            }
+
+            res.json({
+              jsonrpc: "2.0",
+              result,
+              id: request.id
+            });
+            
+          } catch (error) {
+            console.error(`[MCP] Tool execution error:`, error);
+            res.json({
+              jsonrpc: "2.0",
+              error: {
+                code: -32603,
+                message: "Tool execution failed",
+                data: error instanceof Error ? error.message : String(error)
+              },
+              id: request.id
+            });
+          }
         } else {
           res.status(400).json({
             jsonrpc: "2.0",
@@ -355,7 +394,6 @@ export class HTTPMCPTransport {
               }
             },
             {
-              name: "list_charges",
               description: "Lista cobranças com paginação por cursor",
               inputSchema: {
                 type: "object",

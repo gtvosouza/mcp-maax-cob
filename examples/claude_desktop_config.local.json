@@ -6,11 +6,8 @@
       "env": {
         "MCP_TRANSPORT": "stdio",
         "NODE_ENV": "production",
-        "POSTGRES_HOST": "localhost",
-        "POSTGRES_PORT": "5432",
-        "POSTGRES_DB": "mcp",
-        "POSTGRES_USER": "mcpuser",
-        "POSTGRES_PASSWORD": "mcppass",
+        "REDIS_URL": "redis://localhost:6379",
+        "MCP_TOKEN_SECRET": "change-me",
         "REDIS_URL": "redis://localhost:6379",
         "ENCRYPTION_KEY_HEX": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         "WEBHOOK_HMAC_SECRET": "mcp-webhook-secret-2025",

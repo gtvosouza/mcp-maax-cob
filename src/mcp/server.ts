@@ -7,37 +7,175 @@ import {
   McpError,
   InitializeRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { ChargeRequest } from "../api/schemas";
-import { getPublicKey } from "../api/auth";
-import { getProvider, insertCharge, requireTenantByPublicKey, setChargeData, getCharge } from "../infra/db";
-import { getAdapter } from "../adapters";
+import { getAdapter, getAdapterWithPlainCredentials } from "../adapters";
+import { getProviderCredentials } from "../infra/token-utils";
+import { providerInfo } from "../config/provider-info";
 import { metricsCollector } from "../infra/metrics";
+import https from "https";
+import fs from "fs";
+import path from "path";
+
+/**
+ * Helper to get OAuth scopes from Banco do Brasil via introspection
+ */
+async function getBancoDoBrasilScopes(credentials: any): Promise<string[]> {
+  try {
+    // Try to request token with introspection scope
+    const INTROSPECTION_SCOPES = ["extrato-info", "oauth.introspeccao"];
+    const EXTRATO_SCOPES = ["extrato-info"];
+
+    // Setup mTLS agent if certificates are available
+    let httpsAgent: https.Agent | undefined;
+    if (!credentials.sandbox) {
+      try {
+        let cert: string | Buffer;
+        let key: string | Buffer;
+
+        // Try to get certificates from credentials first, then from files
+        if (credentials.cert && credentials.cert_key) {
+          cert = credentials.cert;
+          key = credentials.cert_key;
+          console.error('[BB Introspection] Using mTLS certificates from credentials');
+        } else {
+          // Fallback: read from files
+          const certsDir = path.join(process.cwd(), 'certs');
+          const certPath = path.join(certsDir, 'certificate.crt');
+          const keyPath = path.join(certsDir, 'private.key');
+
+          if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+            cert = fs.readFileSync(certPath);
+            key = fs.readFileSync(keyPath);
+            console.error('[BB Introspection] Using mTLS certificates from files');
+          } else {
+            console.error('[BB Introspection] ⚠️  No mTLS certificates found, introspection may fail');
+            return EXTRATO_SCOPES; // Return fallback early
+          }
+        }
+
+        httpsAgent = new https.Agent({
+          cert,
+          key,
+          rejectUnauthorized: false
+        });
+      } catch (error) {
+        console.error('[BB Introspection] Failed to setup mTLS:', error);
+        return EXTRATO_SCOPES; // Return fallback on error
+      }
+    }
+
+    // Get OAuth token first
+    const tokenUrl = credentials.sandbox
+      ? "https://oauth.hm.bb.com.br/oauth/token"
+      : "https://oauth.bb.com.br/oauth/token";
+
+    const authString = Buffer.from(
+      `${credentials.client_id}:${credentials.client_secret}`
+    ).toString("base64");
+
+    const params = new URLSearchParams();
+    params.append("grant_type", "client_credentials");
+    params.append("scope", INTROSPECTION_SCOPES.join(" "));
+
+    const tokenResponse = await fetch(tokenUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${authString}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: params.toString(),
+      ...(httpsAgent && { agent: httpsAgent })
+    });
+
+    if (!tokenResponse.ok) {
+      const errorText = await tokenResponse.text();
+      console.error(`[BB Introspection] Token request failed: ${tokenResponse.status}`);
+      console.error(`[BB Introspection] Error response:`, errorText);
+      console.error(`[BB Introspection] 💡 App may not have oauth.introspeccao scope registered`);
+      return EXTRATO_SCOPES; // Fallback
+    }
+
+    const tokenData = await tokenResponse.json() as any;
+    const accessToken = tokenData.access_token;
+    const grantedScope = tokenData.scope || "";
+    console.error(`[BB Introspection] ✅ Token obtained successfully`);
+    console.error(`[BB Introspection] Granted scopes: ${grantedScope}`);
+
+    // If the app doesn't have oauth.introspeccao scope, return the granted scopes directly
+    if (grantedScope && !grantedScope.includes("oauth.introspeccao")) {
+      const scopes = grantedScope.split(" ").filter((s: string) => s.length > 0);
+      console.error(`[BB Introspection] ℹ️  App doesn't have oauth.introspeccao scope, using granted scopes directly`);
+      return scopes;
+    }
+
+    // Introspect token to get scopes
+    const introspectionUrl = credentials.sandbox
+      ? "https://oauth.hm.bb.com.br/oauth/introspect"
+      : "https://oauth.bb.com.br/oauth/introspect";
+
+    const introspectParams = new URLSearchParams();
+    introspectParams.append("token", accessToken);
+    introspectParams.append("token_type_hint", "access_token");
+
+    const introspectResponse = await fetch(introspectionUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${authString}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: introspectParams.toString(),
+      ...(httpsAgent && { agent: httpsAgent })
+    });
+
+    if (!introspectResponse.ok) {
+      const errorText = await introspectResponse.text();
+      console.error(`[BB Introspection] Introspection failed: ${introspectResponse.status}`);
+      console.error(`[BB Introspection] Error response:`, errorText);
+      console.error(`[BB Introspection] ⚠️  Note: Introspection requires 'oauth.introspeccao' scope`);
+      console.error(`[BB Introspection] 💡 Recommendation: Add 'scopes' field to JWT credentials to avoid introspection`);
+      return EXTRATO_SCOPES; // Fallback
+    }
+
+    const introspectionData = await introspectResponse.json() as any;
+
+    if (introspectionData.active && introspectionData.scope) {
+      const scopes = introspectionData.scope.split(" ");
+      console.error(`[BB Introspection] ✅ Scopes detected: ${scopes.join(", ")}`);
+      return scopes;
+    }
+
+    return EXTRATO_SCOPES; // Fallback
+  } catch (error) {
+    console.error("[BB Introspection] Error:", error);
+    return ["extrato-info"]; // Safe fallback
+  }
+}
 
 class MCPChargeServer {
   private server: Server;
+  private contextProviderId?: string;
+  private contextCredentials?: Record<string, any>;
 
   constructor() {
     this.server = new Server(
       {
         name: "mcp-maax-cob",
-        version: "1.0.0",
+        version: "2.0.0",
       },
       {
         capabilities: {
-          tools: { 
-            listChanged: true 
+          tools: {
+            listChanged: true
           },
         },
       }
     );
 
     this.setupRequestHandlers();
-    this.setupErrorHandling();
+    this.setupToolHandlers();
   }
 
   private setupRequestHandlers() {
-    // Initialize request handler
-    this.server.setRequestHandler(InitializeRequestSchema, async (request) => {
+    this.server.setRequestHandler(InitializeRequestSchema, async () => {
       return {
         protocolVersion: "2024-11-05",
         capabilities: {
@@ -45,20 +183,66 @@ class MCPChargeServer {
         },
         serverInfo: {
           name: "mcp-maax-cob",
-          version: "1.0.0"
+          version: "2.0.0"
         }
       };
     });
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+
+    this.server.setRequestHandler(ListToolsRequestSchema, async (request) => {
+      console.error('[MCP] 🔧 ListTools request recebido');
+
+      // Discover which tools are available based on provider capabilities
+      const availableTools = await this.discoverAvailableTools();
+
       return {
-        tools: [
+        tools: availableTools
+      };
+    });
+  }
+
+  /**
+   * Dynamically discover which tools are available based on provider capabilities
+   * This method is called by the transport layer during tools/list requests
+   * @param credentials - Provider credentials from JWT token (optional, for capability check)
+   */
+  public async discoverAvailableTools(credentials?: Record<string, any>) {
+    // Get provider from token/context
+    const providerId = this.getProviderFromContext() || 'banco_do_brasil';
+
+    // Build dynamic tools based on provider and credentials
+    const allTools = [
+          {
+            name: "get_providers_metadata",
+            description: "Obter metadados de todos os provedores disponíveis",
+            inputSchema: {
+              type: "object",
+              properties: {},
+              additionalProperties: false
+            }
+          },
+          {
+            name: providerId === 'banco_do_brasil' ? 'extrato_conta_corrente' : 'get_account_statement',
+            description: providerId === 'banco_do_brasil'
+              ? 'Obtém extrato de conta corrente - Banco do Brasil (GET /extratos/v1/conta-corrente/agencia/{agencia}/conta/{conta})'
+              : `Obtém extrato bancário do ${providerId}`,
+            inputSchema: {
+              type: "object",
+              properties: {
+                numeroPaginaSolicitacao: { type: "integer", description: "Número da página (opcional)" },
+                quantidadeRegistroPaginaSolicitacao: { type: "integer", description: "Quantidade de registros por página (50-200)" },
+                dataInicioSolicitacao: { type: "string", description: "Data inicial no formato DDMMAAAA" },
+                dataFimSolicitacao: { type: "string", description: "Data final no formato DDMMAAAA" }
+              },
+              additionalProperties: false
+            }
+          },
           {
             name: "create_charge",
             description: "Cria uma cobrança/unificação boleto/pix via MCP",
             inputSchema: {
               type: "object",
               properties: {
-                provider_id: { type: "string", description: "ID do provedor de pagamento" },
+                provider_id: { type: "string", description: "ID do provedor (cora, sicredi, itau, banco_do_brasil)" },
                 amount: { type: "integer", description: "Valor em centavos" },
                 due_date: { type: "string", format: "date", description: "Data de vencimento (YYYY-MM-DD)" },
                 reference_id: { type: "string", description: "ID de referência para idempotência" },
@@ -114,35 +298,21 @@ class MCPChargeServer {
                       days_before_due: { type: "integer" }
                     }
                   }
-                },
-                api_key: { type: "string", description: "Chave de API pública" }
+                }
               },
-              required: ["provider_id", "amount", "due_date", "payment_methods", "customer", "api_key"]
+              required: ["provider_id", "amount", "due_date", "payment_methods", "customer"]
             }
           },
           {
             name: "retrieve_charge",
-            description: "Consulta uma cobrança por ID",
+            description: "Consulta uma cobrança por ID do provedor",
             inputSchema: {
               type: "object",
               properties: {
-                id: { type: "string", description: "ID da cobrança" },
-                api_key: { type: "string", description: "Chave de API pública" }
+                provider_id: { type: "string", description: "ID do provedor" },
+                provider_charge_id: { type: "string", description: "ID da cobrança no provedor" }
               },
-              required: ["id", "api_key"]
-            }
-          },
-          {
-            name: "list_charges",
-            description: "Lista cobranças com paginação por cursor",
-            inputSchema: {
-              type: "object",
-              properties: {
-                limit: { type: "integer", description: "Limite de resultados" },
-                starting_after: { type: "string", description: "Cursor para paginação" },
-                api_key: { type: "string", description: "Chave de API pública" }
-              },
-              required: ["api_key"]
+              required: ["provider_id", "provider_charge_id"]
             }
           },
           {
@@ -151,10 +321,10 @@ class MCPChargeServer {
             inputSchema: {
               type: "object",
               properties: {
-                id: { type: "string", description: "ID da cobrança" },
-                api_key: { type: "string", description: "Chave de API pública" }
+                provider_id: { type: "string", description: "ID do provedor" },
+                provider_charge_id: { type: "string", description: "ID da cobrança no provedor" }
               },
-              required: ["id", "api_key"]
+              required: ["provider_id", "provider_charge_id"]
             }
           },
           {
@@ -163,292 +333,458 @@ class MCPChargeServer {
             inputSchema: {
               type: "object",
               properties: {
-                id: { type: "string", description: "ID da cobrança" },
+                provider_id: { type: "string", description: "ID do provedor" },
+                provider_charge_id: { type: "string", description: "ID da cobrança no provedor" },
                 instruction_type: { type: "string", description: "Tipo de instrução" },
-                parameters: { type: "object", description: "Parâmetros da instrução" },
-                api_key: { type: "string", description: "Chave de API pública" }
+                parameters: { type: "object", description: "Parâmetros da instrução" }
               },
-              required: ["id", "instruction_type", "api_key"]
+              required: ["provider_id", "provider_charge_id", "instruction_type"]
             }
           }
-        ]
-      };
-    });
+        ];
 
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      switch (request.params.name) {
-        case "create_charge":
-          return await this.handleCreateCharge(request.params.arguments);
-        
-        case "retrieve_charge":
-          return await this.handleRetrieveCharge(request.params.arguments);
-        
-        case "list_charges":
-          return await this.handleListCharges(request.params.arguments);
-        
-        case "cancel_charge":
-          return await this.handleCancelCharge(request.params.arguments);
-        
-        case "apply_instruction":
-          return await this.handleApplyInstruction(request.params.arguments);
-        
-        default:
-          throw new McpError(
-            ErrorCode.MethodNotFound,
-            `Unknown tool: ${request.params.name}`
-          );
-      }
-    });
-  }
-
-  private async handleCreateCharge(args: any) {
+    // Try to get adapter and check capabilities
     try {
-      const { api_key, ...payload } = args;
-      
-      // Validar API key
-      const tenantId = await requireTenantByPublicKey(api_key);
-      if (!tenantId) {
-        throw new McpError(ErrorCode.InvalidRequest, "Invalid API key");
+      // Get provider from token/context (default to banco_do_brasil for testing)
+      const providerId = this.getProviderFromContext() || 'banco_do_brasil';
+
+      // Skip capability discovery if no credentials provided (stateless mode)
+      if (!credentials) {
+        console.error('[MCP] ⚠️  No credentials provided for capability discovery, returning all tools');
+        return allTools;
       }
 
-      // Validar payload
-      const parsed = ChargeRequest.safeParse(payload);
-      if (!parsed.success) {
-        throw new McpError(ErrorCode.InvalidRequest, `Validation error: ${parsed.error.message}`);
-      }
+      // Debug: log credentials structure
+      console.error('[MCP] 🔍 Credentials received:', JSON.stringify(credentials, null, 2));
 
-      const provider = await getProvider(tenantId, payload.provider_id);
-      if (!provider) {
-        throw new McpError(ErrorCode.InvalidRequest, "Provider not found");
-      }
+      // For Banco do Brasil, check scopes
+      if (providerId === 'banco_do_brasil') {
+        let scopes: string[] = [];
 
-      const adapter = getAdapter(provider.provider_type, provider.credentials_encrypted, provider.provider_specific_config_encrypted);
-      const chargeId = await insertCharge(tenantId, payload.provider_id, payload);
-      
-      // Track provider request
-      metricsCollector.incrementProviderCounter(provider.provider_type, 'requests');
-      
-      const res = await adapter.createCharge({
-        tenantId, providerId: payload.provider_id,
-        amount: payload.amount, due_date: payload.due_date,
-        reference_id: payload.reference_id,
-        payment_methods: payload.payment_methods,
-        customer: payload.customer,
-        interest: payload.interest, fine: payload.fine, discounts: payload.discounts
-      });
-
-      await setChargeData(tenantId, chargeId, {
-        provider_charge_id: res.provider_charge_id,
-        status: "PENDING",
-        data: { ...res.data, payment_methods: payload.payment_methods }
-      });
-
-      // Track successful charge creation
-      metricsCollector.incrementCounter('charges_created_total');
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              id: chargeId,
-              provider_charge_id: res.provider_charge_id,
-              status: "PENDING",
-              amount: payload.amount,
-              due_date: payload.due_date,
-              payment_methods: payload.payment_methods,
-              data: res.data
-            }, null, 2)
-          }
-        ]
-      };
-    } catch (error) {
-      // Track failed charge creation
-      metricsCollector.incrementCounter('charges_failed_total');
-      
-      if (error instanceof McpError) {
-        throw error;
-      }
-      
-      if (error instanceof Error) {
-        // Check if it's a provider-specific error
-        if (error.message.includes("auth failed") || error.message.includes("API")) {
-          throw new McpError(ErrorCode.InternalError, "Payment provider is temporarily unavailable");
+        // Check if scopes are explicitly provided in credentials
+        if (credentials.scopes && Array.isArray(credentials.scopes)) {
+          scopes = credentials.scopes as string[];
+          console.error('[MCP] 🔍 Using scopes from credentials');
+        } else {
+          // If no scopes in credentials, try OAuth introspection (requires oauth.introspeccao scope)
+          // IMPORTANT: Introspection will fail if the app doesn't have 'oauth.introspeccao' scope
+          // Best practice: Add 'scopes' field to JWT credentials to avoid introspection
+          // Example JWT payload:
+          // {
+          //   "credentials": {
+          //     "scopes": ["extrato-info", "cobrancas-requisicao", "cobrancas-info", ...]
+          //   }
+          // }
+          console.error('[MCP] ⚠️  No scopes in credentials, performing OAuth introspection...');
+          scopes = await getBancoDoBrasilScopes(credentials);
         }
-      }
-      
-      throw new McpError(ErrorCode.InternalError, "Unexpected error creating charge");
-    }
-  }
 
-  private async handleRetrieveCharge(args: any) {
-    try {
-      const { api_key, id } = args;
-      
-      const tenantId = await requireTenantByPublicKey(api_key);
-      if (!tenantId) {
-        throw new McpError(ErrorCode.InvalidRequest, "Invalid API key");
-      }
+        // Continue with scope-based filtering
+        const CHARGE_SCOPES = ["cobrancas-requisicao", "cobrancas-info", "cobrancas-boletos-requisicao", "cobrancas-boletos-info"];
+        const EXTRATO_SCOPES = ["extrato-info"];
 
-      const ch = await getCharge(tenantId, id);
-      if (!ch) {
-        throw new McpError(ErrorCode.InvalidRequest, "Charge not found");
-      }
+        const canCreateCharges = CHARGE_SCOPES.every(s => scopes.includes(s));
+        const canGetStatements = EXTRATO_SCOPES.every(s => scopes.includes(s));
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              id: ch.id,
-              provider_charge_id: ch.provider_charge_id,
-              status: ch.status,
-              amount: ch.amount,
-              due_date: ch.due_date,
-              payment_methods: ch.data?.payment_methods || [],
-              data: ch.data || {},
-            }, null, 2)
+        console.error(`[MCP] 🔍 Scope-based capability discovery for ${providerId}:`);
+        console.error(`  - Available scopes: ${scopes.join(", ")}`);
+        console.error(`  - canCreateCharges: ${canCreateCharges}`);
+        console.error(`  - canGetStatements: ${canGetStatements}`);
+
+        // Filter tools based on scopes
+        const filteredTools = allTools.filter(tool => {
+          // Always include metadata tool
+          if (tool.name === 'get_providers_metadata') return true;
+
+          // Include statement tool only if provider supports it
+          if (tool.name === 'get_account_statement') return canGetStatements;
+
+          // Include charge tools only if provider supports them
+          if (['create_charge', 'retrieve_charge', 'cancel_charge', 'apply_instruction'].includes(tool.name)) {
+            return canCreateCharges;
           }
-        ]
-      };
-    } catch (error) {
-      if (error instanceof McpError) {
-        throw error;
-      }
-      throw new McpError(ErrorCode.InternalError, "Unexpected error retrieving charge");
-    }
-  }
 
-  private async handleListCharges(args: any) {
-    // MVP: return empty list for now
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            data: [],
-            next_cursor: null
-          }, null, 2)
-        }
-      ]
-    };
-  }
-
-  private async handleCancelCharge(args: any) {
-    try {
-      const { api_key, id } = args;
-      
-      const tenantId = await requireTenantByPublicKey(api_key);
-      if (!tenantId) {
-        throw new McpError(ErrorCode.InvalidRequest, "Invalid API key");
-      }
-
-      const charge = await getCharge(tenantId, id);
-      if (!charge) {
-        throw new McpError(ErrorCode.InvalidRequest, "Charge not found");
-      }
-
-      // Check if charge can be cancelled
-      if (charge.status === "CANCELLED") {
-        throw new McpError(ErrorCode.InvalidRequest, "Charge is already cancelled");
-      }
-      if (charge.status === "PAID") {
-        throw new McpError(ErrorCode.InvalidRequest, "Cannot cancel a paid charge");
-      }
-
-      const provider = await getProvider(tenantId, charge.provider_id);
-      if (!provider) {
-        throw new McpError(ErrorCode.InvalidRequest, "Provider not found");
-      }
-
-      const adapter = getAdapter(provider.provider_type, provider.credentials_encrypted, provider.provider_specific_config_encrypted);
-      
-      // Track cancellation attempt
-      metricsCollector.incrementProviderCounter(provider.provider_type, 'requests');
-      
-      try {
-        const result = await adapter.cancelCharge({
-          tenantId,
-          providerId: charge.provider_id,
-          chargeId: id,
-          providerChargeId: charge.provider_charge_id
+          return true;
         });
 
-        if (result.success) {
-          await setChargeData(tenantId, id, {
-            status: "CANCELLED",
-            data: { ...charge.data, cancelled_at: new Date().toISOString(), cancellation_reason: "manual_cancellation" }
-          });
+        console.error(`[MCP] ✅ Filtered ${allTools.length} tools -> ${filteredTools.length} tools based on scopes`);
+        return filteredTools;
+      }
 
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  id,
-                  status: "CANCELLED",
-                  cancelled_at: new Date().toISOString(),
-                  message: "Charge cancelled successfully"
-                }, null, 2)
-              }
-            ]
-          };
-        } else {
-          throw new McpError(ErrorCode.InvalidRequest, result.error || "Failed to cancel charge with provider");
+      console.error('[MCP] ⚠️  No scopes found in credentials for scope-based discovery');
+    } catch (error) {
+      console.error('[MCP] ⚠️  Capability discovery failed:', error);
+    }
+
+    // Fallback: return all tools if capability discovery fails
+    console.error('[MCP] ⚠️  Using fallback - returning all tools');
+    return allTools;
+  }
+
+  /**
+   * Get provider ID from context (e.g., from JWT token in HTTP transport)
+   */
+  private getProviderFromContext(): string | undefined {
+    return this.contextProviderId;
+  }
+
+  /**
+   * Set provider ID from external context (called by transport layer)
+   */
+  public setProviderContext(providerId: string) {
+    this.contextProviderId = providerId;
+  }
+
+  /**
+   * Set credentials from external context (called by transport layer)
+   */
+  public setCredentialsContext(credentials: Record<string, any>) {
+    this.contextCredentials = credentials;
+  }
+
+  private setupToolHandlers() {
+    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const { name, arguments: args } = request.params;
+
+      try {
+        switch (name) {
+          case "get_providers_metadata":
+            return await this.handleGetProvidersMetadata();
+          case "get_account_statement":
+          case "extrato_conta_corrente":
+            return await this.handleGetAccountStatement(args);
+          case "create_charge":
+            return await this.handleCreateCharge(args);
+          case "retrieve_charge":
+            return await this.handleRetrieveCharge(args);
+          case "cancel_charge":
+            return await this.handleCancelCharge(args);
+          case "apply_instruction":
+            return await this.handleApplyInstruction(args);
+          default:
+            throw new McpError(
+              ErrorCode.MethodNotFound,
+              `Unknown tool: ${name}`
+            );
         }
       } catch (error) {
-        // Track failed cancellation
-        metricsCollector.incrementProviderCounter(provider.provider_type, 'errors');
-        
-        // Check if provider doesn't support cancellation
-        if (error instanceof Error && error.message.includes("not supported")) {
-          throw new McpError(ErrorCode.InvalidRequest, "This payment provider does not support charge cancellation");
+        if (error instanceof McpError) {
+          throw error;
         }
-        
-        throw error;
+
+        throw new McpError(
+          ErrorCode.InternalError,
+          `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
+    });
+  }
+
+  public async handleGetProvidersMetadata() {
+    const metadata = {
+      providers: providerInfo.map((info) => ({
+        id: info.id,
+        name: info.name,
+        description: info.description,
+        supported_methods: info.paymentMethods,
+        supports_cancellation: info.operations.cancelCharge,
+        cancel_methods: info.operations.cancelMethods ?? [],
+        operations: info.operations,
+        auth_methods: info.authMethods,
+        required_credentials: info.requiredCredentials,
+        api_endpoints: info.apiEndpoints ?? undefined
+      }))
+    };
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(metadata, null, 2)
+        }
+      ]
+    };
+  }
+
+  public async handleGetAccountStatement(args: any) {
+    // Get provider from context (set by JWT)
+    const providerId = this.getProviderFromContext();
+
+    if (!providerId) {
+      throw new McpError(ErrorCode.InvalidParams, "provider_id not found in context");
+    }
+
+    const provider = providerInfo.find((info) => info.id === providerId);
+
+    if (!provider || provider.operations?.getStatement !== true) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `Provider ${providerId} does not support account statements`
+      );
+    }
+
+    // Try to get credentials from context first (JWT), then fallback to env
+    let credentials: Record<string, any>;
+    if (this.contextCredentials) {
+      credentials = this.contextCredentials;
+      console.error('[MCP] Using credentials from JWT context');
+    } else {
+      credentials = getProviderCredentials(providerId);
+      console.error('[MCP] Using credentials from environment');
+    }
+
+    // Extract agency and account from credentials
+    // Expected JWT format for Banco do Brasil:
+    // {
+    //   "agency": "4733-3",        // Agência com dígito
+    //   "account": "15032-0",      // Conta com dígito
+    //   "convenio": "2861488",     // Convênio (para cobrança)
+    //   "account_type": "conta_corrente"
+    // }
+    let agency = credentials.agency;
+    let account = credentials.account || credentials.account_number;
+
+    // Fallback: If account_number contains a slash, split it (format: agency/account)
+    if (!agency && credentials.account_number && credentials.account_number.includes('/')) {
+      const parts = credentials.account_number.split('/');
+      agency = parts[0];
+      account = parts[1];
+      console.error(`[MCP] Parsed account_number format: agency=${agency}, account=${account}`);
+    }
+
+    if (!agency || !account) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `Missing agency or account in credentials. Required JWT format: { "agency": "XXXX-X", "account": "XXXXX-X" }. Found: agency=${agency}, account=${account}`
+      );
+    }
+
+    console.error(`[MCP] ✅ Using agency=${agency}, account=${account} from credentials`);
+
+    // Query parameters come from user args
+    const query = (args ?? {}) as Record<string, any>;
+
+    // Create adapter - use plain credentials function if from JWT context
+    const adapter = this.contextCredentials
+      ? getAdapterWithPlainCredentials(providerId, credentials, {})
+      : getAdapter(providerId, JSON.stringify(credentials), JSON.stringify({}));
+
+    if (!adapter.getAccountStatement) {
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Adapter for ${providerId} does not implement account statements`
+      );
+    }
+
+    metricsCollector.incrementProviderCounter(providerId, "requests");
+
+    try {
+      const statement = await adapter.getAccountStatement({
+        providerId,
+        agency,
+        account,
+        query: {
+          page: query.page ?? query.numeroPaginaSolicitacao,
+          pageSize: query.page_size ?? query.quantidadeRegistroPaginaSolicitacao,
+          startDate: query.start_date ?? query.dataInicioSolicitacao,
+          endDate: query.end_date ?? query.dataFimSolicitacao,
+          appKey: query.app_key ?? query.appKey ?? query.gwDevAppKey ?? query["gw-dev-app-key"]
+        }
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              data: statement.data,
+              raw: statement.raw
+            }, null, 2)
+          }
+        ]
+      };
     } catch (error) {
-      if (error instanceof McpError) {
-        throw error;
-      }
-      throw new McpError(ErrorCode.InternalError, "Unexpected error cancelling charge");
+      metricsCollector.incrementProviderCounter(providerId, "errors");
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error instanceof Error ? error.message : String(error)
+            }, null, 2)
+          }
+        ]
+      };
     }
   }
 
-  private async handleApplyInstruction(args: any) {
-    // MVP: accept and return acknowledgment
+  public async handleCreateCharge(args: any) {
+    const { provider_id, ...chargeData } = args;
+
+    try {
+      const credentials = getProviderCredentials(provider_id);
+      const credentialsJson = JSON.stringify(credentials);
+      const configJson = JSON.stringify({});
+      const adapter = getAdapter(provider_id, credentialsJson, configJson);
+
+      metricsCollector.incrementProviderCounter(provider_id, "requests");
+
+      const result = await adapter.createCharge({
+        tenantId: "stateless",
+        providerId: provider_id,
+        ...chargeData
+      });
+
+      metricsCollector.incrementCounter("charges_created_total");
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              provider_charge_id: result.provider_charge_id,
+              data: result.data
+            }, null, 2)
+          }
+        ]
+      };
+    } catch (error) {
+      metricsCollector.incrementProviderCounter(provider_id, "errors");
+      metricsCollector.incrementCounter("charges_failed_total");
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error instanceof Error ? error.message : String(error)
+            }, null, 2)
+          }
+        ]
+      };
+    }
+  }
+
+  public async handleRetrieveCharge(args: any) {
+    const { provider_id, provider_charge_id } = args;
+
+    try {
+      const credentials = getProviderCredentials(provider_id);
+      const credentialsJson = JSON.stringify(credentials);
+      const configJson = JSON.stringify({});
+      const adapter = getAdapter(provider_id, credentialsJson, configJson);
+
+      const result = await adapter.retrieveCharge(provider_charge_id);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              status: result.status,
+              data: result.data
+            }, null, 2)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error instanceof Error ? error.message : String(error)
+            }, null, 2)
+          }
+        ]
+      };
+    }
+  }
+
+  public async handleCancelCharge(args: any) {
+    const { provider_id, provider_charge_id } = args;
+
+    try {
+      const credentials = getProviderCredentials(provider_id);
+      const credentialsJson = JSON.stringify(credentials);
+      const configJson = JSON.stringify({});
+      const adapter = getAdapter(provider_id, credentialsJson, configJson);
+
+      const result = await adapter.cancelCharge({
+        tenantId: "stateless",
+        providerId: provider_id,
+        chargeId: provider_charge_id,
+        providerChargeId: provider_charge_id
+      });
+
+      if (result.success) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                data: result.data ?? {}
+              }, null, 2)
+            }
+          ]
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: result.error ?? "Unknown cancellation failure"
+            }, null, 2)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error instanceof Error ? error.message : String(error)
+            }, null, 2)
+          }
+        ]
+      };
+    }
+  }
+
+  public async handleApplyInstruction(args: any) {
     return {
       content: [
         {
           type: "text",
           text: JSON.stringify({
-            accepted: true,
-            message: "Instruction queued for processing"
+            success: false,
+            error: "apply_instruction not implemented"
           }, null, 2)
         }
       ]
     };
   }
 
-  private setupErrorHandling() {
-    this.server.onerror = (error) => {
-      console.error("[MCP Error]", error);
-    };
-
-    process.on("SIGINT", async () => {
-      await this.server.close();
-      process.exit(0);
-    });
+  public getServer() {
+    return this.server;
   }
 
-  async run() {
+  public async start() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error("MCP MAAX COB Server running on stdio");
-  }
-
-  getServer(): Server {
-    return this.server;
   }
 }
 

@@ -1,5 +1,23 @@
 export type ChargeStatus = "PENDING" | "PAID" | "CANCELLED";
 
+export interface AccountStatementRequest {
+  providerId: string;
+  agency: string;
+  account: string;
+  query?: {
+    page?: number;
+    pageSize?: number;
+    startDate?: string;
+    endDate?: string;
+    appKey?: string;
+  };
+}
+
+export interface AccountStatementResponse {
+  raw: unknown;
+  data: Record<string, unknown>;
+}
+
 export interface PaymentProviderAdapter {
   createCharge(input: {
     tenantId: string;
@@ -29,4 +47,14 @@ export interface PaymentProviderAdapter {
     error?: string;
     data?: Record<string, any>;
   }>;
+
+  getAccountStatement?(
+    input: AccountStatementRequest
+  ): Promise<AccountStatementResponse>;
+
+  // Capability discovery methods (optional - for providers that support dynamic capabilities)
+  getAvailableScopes?(): Promise<string[]>;
+  hasScope?(scope: string): Promise<boolean>;
+  canCreateCharges?(): Promise<boolean>;
+  canGetStatements?(): Promise<boolean>;
 }

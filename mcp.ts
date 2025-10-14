@@ -34,9 +34,9 @@ async function main() {
 
     // Inicializar servidor MCP
     const server = new MCPChargeServer();
-    
+
     // Configurar e iniciar transporte
-    const transportManager = new MCPTransportManager(server.getServer());
+    const transportManager = new MCPTransportManager(server.getServer(), server);
     await transportManager.start();
 
     console.error("");
